@@ -12,9 +12,12 @@ Usage
 """
 
 import numpy as np
+from numpy.typing import NDArray
 
 
-def load_mesh_file(path: str):
+def load_mesh_file(
+    path: str,
+) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32], NDArray[np.float32] | None]:
     """Load a polygonal mesh from a .gpkg, .shp, .parquet, .geoparquet, or .obj file.
 
     Accepts triangles, quads, and arbitrary convex polygons.
@@ -53,9 +56,9 @@ def load_mesh_file(path: str):
         geoms = from_wkb(geometry_wkb)
         not_null = np.array([g is not None for g in geoms], dtype=bool)
 
-        coord_map: dict = {}
-        all_coords: list = []
-        faces_list: list = []
+        coord_map: dict[tuple[float, float], int] = {}
+        all_coords: list[tuple[float, float]] = []
+        faces_list: list[list[int]] = []
         for geom in geoms:
             if geom is None:
                 continue
@@ -136,8 +139,8 @@ def load_mesh_file(path: str):
         return verts, faces_flat, offsets, zb_vals
 
     if ext == ".obj":
-        vert_list: list = []
-        faces_list: list = []
+        vert_list: list[list[float]] = []
+        faces_list: list[list[int]] = []
         with open(path) as fh:
             for line in fh:
                 parts = line.strip().split()

@@ -238,7 +238,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                 )
                 seq.record(self._barrier_state)
                 if use_gpu_source:
-                    seq.record(kp.OpAlgoDispatch(self._algo_source, [float(N), 0.0]))
+                    seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
                     seq.record(self._barrier_state)
                 seq.record(kp.OpAlgoDispatch(self._algo_time_advance))
                 seq.record(self._barrier_time)

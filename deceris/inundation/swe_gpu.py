@@ -27,6 +27,8 @@ except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
     from .swe_geometry import MeshGeometry
@@ -37,19 +39,19 @@ if TYPE_CHECKING:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: int) -> list:
+def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: int) -> list[float]:
     return [float(ne), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
 
 
-def _pc_update(nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float) -> list:
-    return [float(nc), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
+def _pc_update(nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float) -> list[float]:
+    return [float(nc), float(dt), float(stage), float(g), float(dry_tol), float(cfl)]
 
 
-def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list:
+def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list[float]:
     return [float(ne), 0.0, float(g), float(dry_tol), float(cfl)]
 
 
-def _pc_cfl_reduce(nc: int, g: float, dry_tol: float, cfl: float) -> list:
+def _pc_cfl_reduce(nc: int, g: float, dry_tol: float, cfl: float) -> list[float]:
     return [float(nc), 0.0, float(g), float(dry_tol), float(cfl)]
 
 
@@ -86,7 +88,7 @@ class SWESolver:
     def __init__(
         self,
         geom: MeshGeometry,
-        spv: dict,
+        spv: dict[str, bytes],
         h0: NDArray[np.float32],
         hu0: NDArray[np.float32],
         hv0: NDArray[np.float32],
@@ -196,7 +198,7 @@ class SWESolver:
         ]
         self._mgr.sequence().record(kp.OpTensorSyncDevice(self._all_tensors)).eval()
 
-    def _build_algorithms(self, spv: dict) -> None:
+    def _build_algorithms(self, spv: dict[str, bytes]) -> None:
         N, E, WG = self.N, self.E, self._WG
         wg_e = (int(np.ceil(E / WG)), 1, 1)
         wg_c = (int(np.ceil(N / WG)), 1, 1)
@@ -265,6 +267,11 @@ class SWESolver:
         self._mgr.sequence().record(kp.OpTensorSyncLocal([self.t_dtbuf])).eval()
         return float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
+    def _require_algo_source(self) -> kp.Algorithm:
+        if self._algo_source is None:
+            raise RuntimeError("source algo not built (call _build_source_algo first)")
+        return self._algo_source
+
     # ── public API ────────────────────────────────────────────────────────────
 
     def reset(
@@ -300,7 +307,7 @@ class SWESolver:
         cfl_interval: int,
         progress: bool = True,
         source_rate: NDArray[np.float32] | None = None,
-        source_fn: callable | None = None,
+        source_fn: Callable[[float], NDArray[np.float32]] | None = None,
         resume: bool = False,
         t_start: float = 0.0,
     ) -> tuple[list[NDArray[np.float32]], list[float]]:
@@ -439,7 +446,7 @@ class SWESolver:
             # ── Source term (GPU kernel — no CPU round-trip) ──────────────────
             if _use_gpu_source:
                 self._mgr.sequence().record(
-                    kp.OpAlgoDispatch(self._algo_source, [float(N), float(dt)])
+                    kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(dt)])
                 ).eval()
             elif not _use_gpu_source:
                 if source_fn is not None:

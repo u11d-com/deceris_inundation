@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
@@ -160,7 +160,7 @@ def _as_1d_float32(name: str, values: object, n_expected: int) -> NDArray[np.flo
 
 
 def _load_initial_state(
-    source: dict[str, object] | str | os.PathLike[str] | None,
+    source: dict[str, object] | str | os.PathLike[str] | Path | None,
     n_cells: int,
     zb_local: NDArray[np.float32],
     *,
@@ -177,9 +177,9 @@ def _load_initial_state(
         return None
 
     if isinstance(source, dict):
-        state = {k: np.asarray(v) for k, v in source.items()}
-    elif isinstance(source, (str, os.PathLike, Path)):
-        path = Path(source)
+        state: dict[str, NDArray[Any]] = {k: np.asarray(v) for k, v in source.items()}
+    else:
+        path = Path(os.fspath(source))
         if not path.exists():
             raise FileNotFoundError(f"Initial state file not found: {path}")
 
@@ -193,7 +193,11 @@ def _load_initial_state(
                 raise ValueError(
                     "For .npy input, expected shape (N,3)=[h,hu,hv] or (N,4)=[h,hu,hv,n_mann]"
                 )
-            state = {"h": arr[:, 0], "hu": arr[:, 1], "hv": arr[:, 2]}
+            state = {
+                "h": arr[:, 0],
+                "hu": arr[:, 1],
+                "hv": arr[:, 2],
+            }
             if arr.shape[1] == 4:
                 state["n_mann"] = arr[:, 3]
         elif suffix in (".csv", ".parquet"):
@@ -204,14 +208,16 @@ def _load_initial_state(
                     "pandas is required to load .csv/.parquet initial state files"
                 ) from exc
 
-            df = pd.read_csv(path) if suffix == ".csv" else pd.read_parquet(path)
-            state = {c: df[c].to_numpy() for c in df.columns}
+            if suffix == ".csv":
+                df: Any = pd.read_csv(path)
+            else:
+                _pd: Any = pd
+                df = _pd.read_parquet(path)
+            state: dict[str, NDArray[Any]] = {c: df[c].to_numpy() for c in df.columns}
         else:
             raise ValueError(
                 f"Unsupported initial state format: {suffix}. Use .npz, .npy, .csv, or .parquet"
             )
-    else:
-        raise TypeError("initial_state_source must be None, dict, or a file path")
 
     # Keep only recognized per-cell state fields; ignore metadata entries.
     valid_state_keys = {"h", "wse", "hu", "hv", "u", "v", "n_mann", id_col}
@@ -369,6 +375,7 @@ class SWEWorkflow:
         geom: MeshGeometry | None = None
         perm: NDArray[np.int32] | None = None
         cache_dir = self.config.geometry_cache_dir
+        cache_key: str = ""
         if cache_dir is not None:
             cache_key = geometry_cache_key(
                 self.config.mesh_source, use_hilbert_reorder=self.config.use_hilbert_reorder
@@ -536,8 +543,12 @@ class SWEWorkflow:
 
         download_hu = getattr(self.solver, "download_hu", None)
         download_hv = getattr(self.solver, "download_hv", None)
-        hu_final = download_hu() if callable(download_hu) else None
-        hv_final = download_hv() if callable(download_hv) else None
+        hu_final: NDArray[np.float32] | None = (
+            cast("NDArray[np.float32]", download_hu()) if callable(download_hu) else None
+        )
+        hv_final: NDArray[np.float32] | None = (
+            cast("NDArray[np.float32]", download_hv()) if callable(download_hv) else None
+        )
 
         return WorkflowResult(
             snapshots=snapshots,

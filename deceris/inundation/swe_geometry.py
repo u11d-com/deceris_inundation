@@ -166,17 +166,19 @@ def build_geometry(
 
     # ── Normalise input to flat + offsets format ──────────────────────────────
     if faces.ndim == 2:
-        N, D = faces.shape
-        face_offsets = np.arange(0, (N + 1) * D, D, dtype=np.int32)
+        shape0, shape1 = faces.shape
+        n = int(shape0)
+        d = int(shape1)
+        face_offsets = np.arange(0, (n + 1) * d, d, dtype=np.int32)
         faces = faces.ravel()
     else:
         if face_offsets is None:
             raise ValueError("face_offsets is required when faces is a 1-D array")
         face_offsets = np.asarray(face_offsets, dtype=np.int32)
-        N = len(face_offsets) - 1
+        n = len(face_offsets) - 1
 
     V = len(verts)
-    _log(f"starting: N={N} cells, V={V} vertices")
+    _log(f"starting: N={n} cells, V={V} vertices")
 
     # ── Cell geometry (area, centroid) ────────────────────────────────────────
     _t_stage = time.perf_counter()
@@ -186,10 +188,10 @@ def build_geometry(
 
     # Fast vectorised path for uniform-degree meshes (triangles or quads)
     if min_degree == max_degree:
-        D = max_degree
-        # Reshape faces into (N, D) for vectorised ops
-        face_matrix = faces.reshape(N, D)
-        # Gather vertex coordinates: (N, D, 2)
+        d = int(max_degree)
+        # Reshape faces into (n, d) for vectorised ops
+        face_matrix = faces.reshape(n, d)
+        # Gather vertex coordinates: (n, d, 2)
         poly_verts = verts[face_matrix]
 
         # Vectorised shoelace area (works for any polygon degree)
@@ -229,10 +231,10 @@ def build_geometry(
         centroid = np.column_stack([cx, cy]).astype(np.float32)
     else:
         # Fallback: mixed-degree mesh — per-cell Python loop
-        centroid = np.empty((N, 2), dtype=np.float32)
-        area = np.empty(N, dtype=np.float32)
+        centroid = np.empty((n, 2), dtype=np.float32)
+        area = np.empty(n, dtype=np.float32)
 
-        for ci in range(N):
+        for ci in range(n):
             s, e = int(face_offsets[ci]), int(face_offsets[ci + 1])
             cell_verts = verts[faces[s:e]]
             sa = _shoelace_area(cell_verts)
@@ -254,9 +256,9 @@ def build_geometry(
 
     # ── Edge enumeration ──────────────────────────────────────────────────────
     _t_stage = time.perf_counter()
-    half_edge_map: dict = {}
+    half_edge_map: dict[tuple[int, int], list[int]] = {}
 
-    for ci in range(N):
+    for ci in range(n):
         s, e = int(face_offsets[ci]), int(face_offsets[ci + 1])
         d = e - s
         cell_face = faces[s:e]
@@ -331,8 +333,8 @@ def build_geometry(
 
     # ── CSR adjacency (primary representation) ────────────────────────────────
     _t_stage = time.perf_counter()
-    cell_edge_lists = [[] for _ in range(N)]
-    cell_nbr_lists = [[] for _ in range(N)]
+    cell_edge_lists: list[list[tuple[int, int, int]]] = [[] for _ in range(n)]
+    cell_nbr_lists: list[list[tuple[int, int]]] = [[] for _ in range(n)]
 
     for eid in range(E):
         cL = int(edge_cellL[eid])
@@ -347,13 +349,13 @@ def build_geometry(
             cell_nbr_lists[cR].append((sR, cL))
 
     # Sort by local side and flatten
-    cell_edge_ptr = np.zeros(N + 1, dtype=np.int32)
-    for ci in range(N):
+    cell_edge_ptr = np.zeros(n + 1, dtype=np.int32)
+    for ci in range(n):
         cell_edge_lists[ci].sort(key=lambda x: x[0])
         cell_nbr_lists[ci].sort(key=lambda x: x[0])
         cell_edge_ptr[ci + 1] = cell_edge_ptr[ci] + len(cell_edge_lists[ci])
 
-    total_slots = int(cell_edge_ptr[N])
+    total_slots = int(cell_edge_ptr[n])
     if total_slots >= 2**31 or np.any(np.diff(cell_edge_ptr.astype(np.int64)) < 0):
         # int32 CSR offsets overflow past this point; fail loudly instead of
         # wrapping cell_edge_ptr into a corrupt CSR.
@@ -363,7 +365,7 @@ def build_geometry(
     cell_nbr_idx = np.empty(total_slots, dtype=np.int32)
     cell_edge_side = np.empty(total_slots, dtype=np.int32)
 
-    for ci in range(N):
+    for ci in range(n):
         s = int(cell_edge_ptr[ci])
         for j, (_, eid, is_right) in enumerate(cell_edge_lists[ci]):
             cell_edge_idx[s + j] = eid
@@ -376,9 +378,9 @@ def build_geometry(
     # ── Dense arrays (padded to max_degree, backward compat) ──────────────────
     _log(f"CSR adjacency built in {time.perf_counter() - _t_stage:.1f}s (max_degree={max_degree})")
     _t_stage = time.perf_counter()
-    cell_edges = np.full((N, max_degree), -1, dtype=np.int32)
-    cell_neighbors = np.full((N, max_degree), -1, dtype=np.int32)
-    for ci in range(N):
+    cell_edges = np.full((n, max_degree), -1, dtype=np.int32)
+    cell_neighbors = np.full((n, max_degree), -1, dtype=np.int32)
+    for ci in range(n):
         s, e = int(cell_edge_ptr[ci]), int(cell_edge_ptr[ci + 1])
         d = e - s
         cell_edges[ci, :d] = cell_edge_idx[s:e]
@@ -403,7 +405,7 @@ def build_geometry(
         cell_nbr_idx=cell_nbr_idx,
         cell_edge_side=cell_edge_side,
         cell_edge_idx_signed=cell_edge_idx_signed,
-        N=N,
+        N=n,
         E=E,
         V=V,
         max_degree=max_degree,

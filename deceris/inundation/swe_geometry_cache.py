@@ -12,13 +12,15 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from .swe_geometry import MeshGeometry
 
 if TYPE_CHECKING:
+    import os
+
     from numpy.typing import NDArray
 
 # Bump whenever build_geometry()/hilbert_reorder() output arrays change
@@ -60,13 +62,16 @@ def geometry_cache_key(mesh_path: str | Path, *, use_hilbert_reorder: bool) -> s
     return hasher.hexdigest()
 
 
-def geometry_cache_path(cache_dir: str | Path, cache_key: str) -> Path:
+def geometry_cache_path(cache_dir: str | os.PathLike[str], cache_key: str) -> Path:
     """Return the on-disk path for a given cache key under ``cache_dir``."""
     return Path(cache_dir) / f"geometry_{cache_key}.npz"
 
 
 def save_geometry_cache(
-    cache_dir: str | Path, cache_key: str, geom: MeshGeometry, perm: NDArray[np.int32]
+    cache_dir: str | os.PathLike[str],
+    cache_key: str,
+    geom: MeshGeometry,
+    perm: NDArray[np.int32],
 ) -> Path:
     """Persist ``geom`` + ``perm`` to ``<cache_dir>/geometry_<cache_key>.npz``."""
     out_dir = Path(cache_dir)
@@ -85,7 +90,7 @@ def save_geometry_cache(
 
 
 def load_geometry_cache(
-    cache_dir: str | Path, cache_key: str
+    cache_dir: str | os.PathLike[str], cache_key: str
 ) -> tuple[MeshGeometry, NDArray[np.int32]] | None:
     """Load a previously cached ``(MeshGeometry, perm)`` pair, or ``None`` on any miss.
 
@@ -106,13 +111,19 @@ def load_geometry_cache(
             ]
             if missing:
                 return None
-            arrays = {name: npz[name] for name in _GEOMETRY_ARRAY_FIELDS}
-            scalars = {name: int(npz[name]) for name in _GEOMETRY_SCALAR_FIELDS}
+            arrays: dict[str, NDArray[Any]] = {name: npz[name] for name in _GEOMETRY_ARRAY_FIELDS}
+            scalars: dict[str, int] = {name: int(npz[name]) for name in _GEOMETRY_SCALAR_FIELDS}
             perm = npz["perm"]
     except (OSError, ValueError, KeyError, EOFError):
         return None
 
-    geom = MeshGeometry(**arrays, **scalars)
+    geom = MeshGeometry(
+        **arrays,
+        N=scalars["N"],
+        E=scalars["E"],
+        V=scalars["V"],
+        max_degree=scalars["max_degree"],
+    )
     return geom, perm
 
 

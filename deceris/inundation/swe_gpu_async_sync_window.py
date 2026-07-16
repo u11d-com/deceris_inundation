@@ -200,7 +200,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 )
             )
             if use_gpu_source:
-                step_seq.record(kp.OpAlgoDispatch(self._algo_source, [float(N), 0.0]))
+                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
             step_seq.eval()
 
             t_sim += dt

@@ -107,7 +107,9 @@ class SWESolverBatchedSubmit(SWESolver):
             step_seq.record(kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl)))
 
             if use_gpu_source:
-                step_seq.record(kp.OpAlgoDispatch(self._algo_source, [float(N), float(dt)]))
+                step_seq.record(
+                    kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(dt)])
+                )
             step_seq.eval()
 
             if not use_gpu_source:

@@ -30,6 +30,7 @@ target-version = "py312"
 line-length = 100
 indent-width = 4
 src = ["deceris", "tests"]
+extend-exclude = ["stubs"]
 
 [tool.ruff.lint]
 select = [
@@ -106,6 +107,14 @@ reportMissingTypeStubs = false
 # stubs/kp/__init__.pyi (see stubPath above) instead of a blanket
 # reportUnknownMemberType=false — that stub IS the type-safety ceiling for
 # kp-touching code; extend it as usage grows rather than loosening this rule.
+
+# Mesh loaders bridge several third-party libraries whose cross-library
+# inference remains incomplete under strict checking.
+[[tool.pyright.executionEnvironments]]
+root = "deceris/inundation/swe_mesh.py"
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
 
 # =============================================================================
 # Pytest

@@ -61,7 +61,7 @@ class RunResult:
     state_hash: str = ""
 
 
-def build_mesh() -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+def build_mesh() -> tuple[NDArray[np.float32], NDArray[np.int32]]:
     """Regular quad grid on the unit square (verts, quads), matches doc §3.1."""
     xs = np.linspace(0.0, 1.0, NX + 1)
     ys = np.linspace(0.0, 1.0, NY + 1)

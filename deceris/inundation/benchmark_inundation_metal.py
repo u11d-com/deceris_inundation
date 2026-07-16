@@ -9,7 +9,7 @@ import statistics
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
@@ -21,6 +21,10 @@ from deceris.inundation.solver_workflow import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
     from numpy.typing import NDArray
 
 DEFAULT_MESH_PATH = (
@@ -101,17 +105,22 @@ def _save_depth_png(
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
 
-    polygons_reordered = []
+    polygons_reordered: list[NDArray[np.float32]] = []
     for new_i in range(n_cells):
         old_i = int(perm[new_i])
         idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
         polygons_reordered.append(verts[idx])
 
     water_cmap_offset = 0.28
-    water_base = plt.cm.Blues(np.linspace(water_cmap_offset, 1.0, 256))
+    water_base: NDArray[np.floating[Any]] = cast(
+        "NDArray[np.floating[Any]]",
+        cast("Any", plt.cm.Blues)(np.linspace(water_cmap_offset, 1.0, 256)),
+    )
     water_cmap = LinearSegmentedColormap.from_list("BluesOffset", water_base)
 
-    fig, ax = plt.subplots(1, 1, figsize=(13, 5))
+    _plt: Any = plt
+    fig_ax: tuple[Figure, Axes] = cast("tuple[Figure, Axes]", _plt.subplots(1, 1, figsize=(13, 5)))
+    fig, ax = fig_ax
     pc = PolyCollection(
         polygons_reordered,
         array=h_final,
@@ -123,21 +132,21 @@ def _save_depth_png(
     ax.add_collection(pc)
     ax.set_xlim(verts[:, 0].min(), verts[:, 0].max())
     ax.set_ylim(verts[:, 1].min(), verts[:, 1].max())
-    fig.colorbar(pc, ax=ax, label="h [m]")
+    cast("Any", fig).colorbar(pc, ax=ax, label="h [m]")
     ax.set_aspect("equal")
-    ax.set_title(f"Water depth at t={t_final_s:.1f}s")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
+    cast("Any", ax).set_title(f"Water depth at t={t_final_s:.1f}s")
+    cast("Any", ax).set_xlabel("x")
+    cast("Any", ax).set_ylabel("y")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=300)
+    cast("Any", fig).savefig(out_path, dpi=300)
     plt.close(fig)
     sys.stdout.write(f"[plot] water-depth PNG saved: {out_path}\n")
     sys.stdout.flush()
 
 
-def _hash_array(arr: NDArray[np.float32]) -> str:
+def _hash_array(arr: NDArray[np.floating[Any]]) -> str:
     a = np.ascontiguousarray(arr)
     data = a.view(np.uint8).tobytes()
     return hashlib.blake2b(data, digest_size=32).hexdigest()
@@ -191,9 +200,9 @@ def _build_pipeline_like_phases(
 
 
 def _validate_run_invariants(
-    snap_times: NDArray[np.float32],
-    snapshots: list[NDArray[np.bool_]],
-    h_final: NDArray[np.float32],
+    snap_times: NDArray[np.floating[Any]],
+    snapshots: Sequence[NDArray[np.floating[Any]]],
+    h_final: NDArray[np.floating[Any]],
     volume_final: float,
     volume_injected: float,
     expected_final_time_s: float,

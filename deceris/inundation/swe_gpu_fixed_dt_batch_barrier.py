@@ -183,7 +183,7 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
                 step_seq.record(self._barrier_state)
                 if use_gpu_source:
                     step_seq.record(
-                        kp.OpAlgoDispatch(self._algo_source, [float(N), float(step_dt)])
+                        kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(step_dt)])
                     )
                     step_seq.record(self._barrier_state)
             step_seq.eval()

@@ -123,7 +123,7 @@ class SWESolverFixedDtBatch(SWESolver):
                 )
                 if use_gpu_source:
                     step_seq.record(
-                        kp.OpAlgoDispatch(self._algo_source, [float(N), float(step_dt)])
+                        kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(step_dt)])
                     )
             step_seq.eval()
 
