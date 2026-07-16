@@ -1,0 +1,9 @@
+services:
+  dev:
+    image: deceris-inundation:dev
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    environment:
+      - IN_CONTAINER=1
+    command: sleep infinity

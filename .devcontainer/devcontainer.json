@@ -1,0 +1,29 @@
+{
+  "name": "deceris-inundation",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
+  ],
+  "remoteEnv": {
+    "IN_CONTAINER": "1",
+    "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "ms-pyright.pyright"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/build/.venv/bin/python",
+        "python.analysis.extraPaths": ["/workspace"],
+        "ruff.path": ["/opt/build/.venv/bin/ruff"]
+      }
+    }
+  }
+}

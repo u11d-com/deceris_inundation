@@ -1,0 +1,45 @@
+--- /tmp/kp-0.9.0/python/src/main.cpp	2024-01-20 16:06:48.000000000 +0100
++++ kp-0.9.0/python/src/main.cpp	2026-07-07 00:00:00.000000000 +0200
+@@ -41,6 +41,18 @@
+     }
+ }
+ 
++std::unique_ptr<kp::OpMemoryBarrier>
++opComputeBarrierPyInit(const std::vector<std::shared_ptr<kp::Tensor>>& tensors)
++{
++    return std::unique_ptr<kp::OpMemoryBarrier>{ new kp::OpMemoryBarrier(
++      tensors,
++      vk::AccessFlagBits::eShaderWrite,
++      vk::AccessFlagBits::eShaderRead,
++      vk::PipelineStageFlagBits::eComputeShader,
++      vk::PipelineStageFlagBits::eComputeShader,
++      true) };
++}
++
+ PYBIND11_MODULE(kp, m)
+ {
+ 
+@@ -95,6 +107,14 @@
+       .def(py::init<const std::vector<std::shared_ptr<kp::Tensor>>&>(),
+            DOC(kp, OpTensorCopy, OpTensorCopy));
+ 
++    py::class_<kp::OpMemoryBarrier,
++               kp::OpBase,
++               std::shared_ptr<kp::OpMemoryBarrier>>(
++      m, "OpComputeBarrier", "Compute shader storage-buffer barrier.")
++      .def(py::init(&opComputeBarrierPyInit),
++           "Barrier from shader writes to later shader reads/writes.",
++           py::arg("tensors"));
++
+     py::class_<kp::OpAlgoDispatch,
+                kp::OpBase,
+                std::shared_ptr<kp::OpAlgoDispatch>>(
+@@ -186,7 +206,7 @@
+         DOC(kp, Sequence, eval_2))
+       .def(
+         "eval_async",
+-        [](kp::Sequence& self) { return self.eval(); },
++        [](kp::Sequence& self) { return self.evalAsync(); },
+         DOC(kp, Sequence, evalAwait))
+       .def(
+         "eval_async",

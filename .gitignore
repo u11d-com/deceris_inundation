@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# uv / venv — uv.lock IS committed (frozen builds); venv lives in the
+# Docker image, never on host.
+.venv/
+.ruff_cache/
+.pyright_cache/
+
+# Build / runtime artifacts
+*.sif
+*.parquet
+*.npz
+.tmp/
+
+# Benchmark output directory (kept under deceris/inundation/ for legacy path
+# compatibility — .rsync-ignore also excludes it for remote rsync workflows).
+deceris/inundation/results/

@@ -1,0 +1,41 @@
+Bootstrap: docker-daemon
+From: deceris-inundation:dev
+
+# Thin Apptainer wrapper around the deceris-inundation:dev docker image.
+# The docker image already bakes system deps, the Python venv (all extras),
+# and the kp (Kompute) Vulkan backend build — nothing to install here.
+# Source is bind-mounted at runtime, matching the dev-container pattern
+# (docker run -v "$(pwd):/workspace"), so there is no stub-package trick and
+# no %post/%files section.
+
+%environment
+    export PATH=/opt/build/.venv/bin:$PATH
+    export PYTHONPATH=/workspace
+    export LD_LIBRARY_PATH=/opt/nvidia/lib:${LD_LIBRARY_PATH:-}
+    export VK_ICD_FILENAMES=/opt/nvidia/vulkan/icd.d/nvidia_icd.json
+
+%runscript
+    exec "$@"
+
+%test
+    /opt/build/.venv/bin/python -c "import numpy, kp"
+
+%help
+    Preferred: use the justfile from the repo root.
+      just image-build      # build deceris-inundation:dev
+      just apptainer-build  # apptainer build inundation.sif inundation.def
+      just apptainer-run -- python -m deceris.inundation.benchmark_lake_at_rest
+
+    Equivalent raw commands, if not using just:
+      docker build -t deceris-inundation:dev .
+      apptainer build inundation.sif inundation.def
+      apptainer exec --nv --bind .:/workspace \
+        inundation.sif \
+        python -m deceris.inundation.benchmark_lake_at_rest
+
+    Vulkan/kp needs the host's NVIDIA Vulkan ICD and userspace libraries.
+    The --nv option exposes that driver stack to the container.
+
+    Rebuild only when the docker base image changes (pyproject.toml/uv.lock/
+    kp-patches/Dockerfile); code edits under the bind-mounted directory take
+    effect immediately.

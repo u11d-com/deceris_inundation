@@ -1,0 +1,34 @@
+--- /tmp/kp-fresh/kp-0.9.0/src/Manager.cpp	2024-01-20 11:58:10.000000000 +0100
++++ /var/folders/n3/_ptbyx_n34lct7mc8tqcc3br0000gn/T/opencode/kp-0.9.0/src/Manager.cpp	2026-05-08 12:59:06.523330269 +0200
+@@ -170,8 +170,31 @@
+     applicationExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+ #endif
+ 
++    // On macOS with MoltenVK, portability enumeration is required since
++    // MoltenVK is a portability driver (Vulkan 1.1+).
++    bool hasPortabilityEnumeration = false;
++    {
++        std::vector<vk::ExtensionProperties> availableExtensions =
++          vk::enumerateInstanceExtensionProperties();
++        for (const vk::ExtensionProperties& ext : availableExtensions) {
++            if (std::string(ext.extensionName.data()) ==
++                VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME) {
++                hasPortabilityEnumeration = true;
++                break;
++            }
++        }
++    }
++    if (hasPortabilityEnumeration) {
++        applicationExtensions.push_back(
++          VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
++    }
++
+     vk::InstanceCreateInfo computeInstanceCreateInfo;
+     computeInstanceCreateInfo.pApplicationInfo = &applicationInfo;
++    if (hasPortabilityEnumeration) {
++        computeInstanceCreateInfo.flags |=
++          vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
++    }
+     if (!applicationExtensions.empty()) {
+         computeInstanceCreateInfo.enabledExtensionCount =
+           (uint32_t)applicationExtensions.size();

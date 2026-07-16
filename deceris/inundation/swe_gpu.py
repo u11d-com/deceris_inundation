@@ -1,0 +1,504 @@
+"""Vulkan/kompute GPU solver for the mesh-based Shallow Water Equations.
+
+Manages GPU buffer allocation, shader pipeline setup, and the Heun RK2
+time-integration loop.
+
+Typical usage
+-------------
+    from swe_gpu import SWESolver
+
+    solver = SWESolver(geom, spv, h0, hu0, hv0, n0)
+    snapshots, snap_times = solver.run(t_end=120.0, output_interval_s=30.0)
+    h_final = solver.download_h()
+"""
+
+from __future__ import annotations
+
+import struct
+import sys
+import time as _time
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+try:
+    import kp
+except ImportError as exc:
+    raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from .swe_geometry import MeshGeometry
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Push-constant helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: int) -> list:
+    return [float(ne), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
+
+
+def _pc_update(nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float) -> list:
+    return [float(nc), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
+
+
+def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list:
+    return [float(ne), 0.0, float(g), float(dry_tol), float(cfl)]
+
+
+def _pc_cfl_reduce(nc: int, g: float, dry_tol: float, cfl: float) -> list:
+    return [float(nc), 0.0, float(g), float(dry_tol), float(cfl)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SWESolver
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class SWESolver:
+    """GPU-accelerated SWE solver (Heun RK2, HLLC, edge-centric FVM).
+
+    Parameters
+    ----------
+    geom : MeshGeometry
+        Hilbert-reordered geometry from ``swe_geometry.hilbert_reorder``.
+    spv : dict[str, bytes]
+        SPIR-V binaries keyed ``"flux"``, ``"update"``, ``"cfl_accum"``,
+        ``"cfl_reduce"``.  Produced by ``swe_shaders.compile_all()``.
+    h0, hu0, hv0 : (N,) float32
+        Initial cell state arrays (depth and momentum components).
+    n0 : (N,) float32
+        Manning roughness coefficient per cell.
+    g : float
+        Gravitational acceleration [m/s²].  Default 9.81.
+    dry_tol : float
+        Depth below which a cell is considered dry.  Default 1e-4.
+    cfl : float
+        CFL safety factor.  Default 0.45.
+    workgroup_size : int
+        GPU workgroup size.  Default 256.
+
+    """
+
+    def __init__(
+        self,
+        geom: MeshGeometry,
+        spv: dict,
+        h0: NDArray[np.float32],
+        hu0: NDArray[np.float32],
+        hv0: NDArray[np.float32],
+        n0: NDArray[np.float32],
+        *,
+        g: float = 9.81,
+        dry_tol: float = 1e-4,
+        cfl: float = 0.45,
+        workgroup_size: int = 256,
+    ) -> None:
+        self.geom = geom
+        self.N = geom.N
+        self.E = geom.E
+        self._g = float(g)
+        self._dry_tol = float(dry_tol)
+        self._cfl = float(cfl)
+        self._WG = workgroup_size
+
+        self._h0 = h0.astype(np.float32)
+        self._area = geom.area
+
+        # CFL sentinel
+        self._SENTINEL_UINT = struct.unpack("I", struct.pack("f", 1e30))[0]
+        self._SENTINEL_F = struct.unpack("f", struct.pack("I", self._SENTINEL_UINT))[0]
+
+        self._mgr = kp.Manager()
+        self._build_tensors(geom, h0, hu0, hv0, n0)
+        self._build_algorithms(spv)
+
+        # Cumulative RK2-step counter across all `run()` calls on this
+        # instance (i.e. across all phases of one workflow run) — surfaced
+        # via `WorkflowResult.steps_total` for benchmark timing (steps/s,
+        # ms/step), not used by the physics itself.
+        self.steps_total = 0
+
+    # ── private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _as_f32_1d(arr: NDArray[np.float32]) -> NDArray[np.float32]:
+        a = np.asarray(arr, dtype=np.float32)
+        if a.ndim != 1:
+            a = np.ravel(a)
+        if not a.flags.c_contiguous:
+            a = np.ascontiguousarray(a)
+        return a
+
+    def _gpu_tensor(self, arr: NDArray[np.float32]) -> kp.Tensor:  # pyright: ignore[reportAttributeAccessIssue] — kp stubs incomplete
+        return self._mgr.tensor(self._as_f32_1d(arr))
+
+    def _set_tensor_host_data(self, tensor: kp.Tensor, arr: NDArray[np.float32]) -> None:  # pyright: ignore[reportAttributeAccessIssue]
+        src = self._as_f32_1d(arr)
+        dst = np.asarray(tensor.data())
+        if dst.size != src.size:
+            raise ValueError(f"Tensor size mismatch: dst={dst.size}, src={src.size}")
+        np.copyto(dst, src)
+
+    def _build_tensors(
+        self,
+        geom: MeshGeometry,
+        h0: NDArray[np.float32],
+        hu0: NDArray[np.float32],
+        hv0: NDArray[np.float32],
+        n0: NDArray[np.float32],
+    ) -> None:
+        g = self._gpu_tensor
+        self.t_h = g(h0)
+        self.t_hu = g(hu0)
+        self.t_hv = g(hv0)
+        self.t_zb = g(geom.zb)
+        self.t_area = g(geom.area)
+        self.t_elen = g(geom.edge_len)
+        self.t_enx = g(geom.edge_nx)
+        self.t_eny = g(geom.edge_ny)
+        self.t_ecL = g(geom.edge_cellL.view(np.float32))
+        self.t_ecR = g(geom.edge_cellR.view(np.float32))
+        self.t_dh = g(np.zeros(self.N, dtype=np.float32))
+        self.t_dhu = g(np.zeros(self.N, dtype=np.float32))
+        self.t_dhv = g(np.zeros(self.N, dtype=np.float32))
+        self.t_h1 = g(np.zeros(self.N, dtype=np.float32))
+        self.t_hu1 = g(np.zeros(self.N, dtype=np.float32))
+        self.t_hv1 = g(np.zeros(self.N, dtype=np.float32))
+        self.t_nmann = g(n0)
+        self.t_dtbuf = g(np.array([self._SENTINEL_F], dtype=np.float32))
+        # Dedicated CFL scratch buffer (binding 18) — decouples CFL from flux dh[]
+        self.t_cfl_scratch = g(np.zeros(self.N, dtype=np.float32))
+
+        self._all_tensors = [
+            self.t_h,
+            self.t_hu,
+            self.t_hv,
+            self.t_zb,
+            self.t_area,
+            self.t_elen,
+            self.t_enx,
+            self.t_eny,
+            self.t_ecL,
+            self.t_ecR,
+            self.t_dh,
+            self.t_dhu,
+            self.t_dhv,
+            self.t_h1,
+            self.t_hu1,
+            self.t_hv1,
+            self.t_nmann,
+            self.t_dtbuf,
+            self.t_cfl_scratch,
+        ]
+        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._all_tensors)).eval()
+
+    def _build_algorithms(self, spv: dict) -> None:
+        N, E, WG = self.N, self.E, self._WG
+        wg_e = (int(np.ceil(E / WG)), 1, 1)
+        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        g, dt = self._g, self._dry_tol
+
+        self._algo_flux = self._mgr.algorithm(
+            self._all_tensors,
+            spv["flux"],
+            workgroup=wg_e,
+            spec_consts=[],
+            push_consts=_pc_flux(E, 0.0, g, dt, self._cfl, 0),
+        )
+        self._algo_update = self._mgr.algorithm(
+            self._all_tensors,
+            spv["update"],
+            workgroup=wg_c,
+            spec_consts=[],
+            push_consts=_pc_update(N, 0.0, 0, g, dt, self._cfl),
+        )
+        self._algo_cfl_accum = self._mgr.algorithm(
+            self._all_tensors,
+            spv["cfl_accum"],
+            workgroup=wg_e,
+            spec_consts=[],
+            push_consts=_pc_cfl_accum(E, g, dt, self._cfl),
+        )
+        self._algo_cfl_reduce = self._mgr.algorithm(
+            self._all_tensors,
+            spv["cfl_reduce"],
+            workgroup=wg_c,
+            spec_consts=[],
+            push_consts=_pc_cfl_reduce(N, g, dt, self._cfl),
+        )
+        self._wg_e = wg_e
+        self._wg_c = wg_c
+
+        # Source kernel (optional — only built if "source" SPV provided)
+        self._algo_source = None
+        if "source" in spv:
+            self._source_spv = spv["source"]
+
+    def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
+        """Build the GPU source kernel using a separate tensor list."""
+        N, WG = self.N, self._WG
+        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        self.t_source = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
+        self._source_tensors = [self.t_h, self.t_source]
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source])).eval()
+        self._algo_source = self._mgr.algorithm(
+            self._source_tensors,
+            self._source_spv,
+            workgroup=wg_c,
+            spec_consts=[],
+            push_consts=[float(N), 0.0],
+        )
+
+    def _upload(self, tensor: kp.Tensor, arr: NDArray[np.float32]) -> None:  # pyright: ignore[reportAttributeAccessIssue]
+        self._set_tensor_host_data(tensor, arr)
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([tensor])).eval()
+
+    def _download(self, tensor: kp.Tensor) -> NDArray[np.float32]:  # pyright: ignore[reportAttributeAccessIssue]
+        self._mgr.sequence().record(kp.OpTensorSyncLocal([tensor])).eval()
+        return np.array(tensor.data(), dtype=np.float32)
+
+    def _read_dt(self) -> float:
+        self._mgr.sequence().record(kp.OpTensorSyncLocal([self.t_dtbuf])).eval()
+        return float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
+
+    # ── public API ────────────────────────────────────────────────────────────
+
+    def reset(
+        self, h0: NDArray[np.float32], hu0: NDArray[np.float32], hv0: NDArray[np.float32]
+    ) -> None:
+        """Re-upload initial conditions without rebuilding GPU resources."""
+        self._h0 = self._as_f32_1d(h0).copy()
+        zeros = np.zeros(self.N, dtype=np.float32)
+
+        self._set_tensor_host_data(self.t_h, h0)
+        self._set_tensor_host_data(self.t_hu, hu0)
+        self._set_tensor_host_data(self.t_hv, hv0)
+        self._set_tensor_host_data(self.t_dh, zeros)
+        self._set_tensor_host_data(self.t_dhu, zeros)
+        self._set_tensor_host_data(self.t_dhv, zeros)
+
+        self._mgr.sequence().record(
+            kp.OpTensorSyncDevice(
+                [self.t_h, self.t_hu, self.t_hv, self.t_dh, self.t_dhu, self.t_dhv]
+            )
+        ).eval()
+
+    def download_h(self) -> NDArray[np.float32]:
+        """Download the current water-depth array from the GPU."""
+        return self._download(self.t_h)
+
+    def run(
+        self,
+        t_end: float,
+        output_interval_s: float,
+        dt_max: float,
+        dt_init: float,
+        cfl_interval: int,
+        progress: bool = True,
+        source_rate: NDArray[np.float32] | None = None,
+        source_fn: callable | None = None,
+        resume: bool = False,
+        t_start: float = 0.0,
+    ) -> tuple[list[NDArray[np.float32]], list[float]]:
+        """Run the Heun RK2 simulation.
+
+        Parameters
+        ----------
+        t_end : float
+            Simulation end time [s].
+        output_interval_s : float
+            Simulation-time interval between depth snapshots [s].
+            For example, ``300.0`` captures a snapshot every 5 minutes.
+        dt_max : float
+            Hard upper bound on the time step.
+        dt_init : float
+            Initial time step before the first CFL estimate.
+        progress : bool
+            Print step / time information periodically.
+        source_rate : (N,) float32, optional
+            Constant volumetric source rate per cell [m³/s].
+            Positive = inflow, negative = outflow (extraction).
+            Applied as  h += dt * source_rate / area  each step.
+        source_fn : callable(t_sim: float) -> (N,) float32, optional
+            Time-varying source function.  Called each step with the current
+            simulation time, must return a (N,) array of volumetric rates [m³/s].
+            If provided, overrides ``source_rate``.
+        resume : bool, optional
+            If True, skip the initial state reset and continue from the GPU
+            state left by the previous run() call.  The simulation time starts
+            at ``t_start`` instead of 0.
+        t_start : float, optional
+            Simulation time offset used when ``resume=True``.  Has no effect
+            when ``resume=False``.
+        cfl_interval : int, optional
+            Recompute the CFL time step every *n* steps.  Set to 1 for maximum
+            safety (recompute every step); higher values reduce overhead.
+
+        Returns
+        -------
+        snapshots : list of (N,) float32 arrays
+            Water depth at each recorded time.
+        snap_times : list of float
+            Simulation time of each snapshot.
+
+        """
+        N, E = self.N, self.E
+        g, dt_ = self._g, self._dry_tol
+        cfl = self._cfl
+
+        if not resume:
+            self.reset(self._h0, np.zeros(N, np.float32), np.zeros(N, np.float32))
+
+        # Precompute inverse area for source application
+        inv_area = (1.0 / self._area).astype(np.float32)
+
+        # ── Source setup ──────────────────────────────────────────────────────
+        # Prefer GPU-side source kernel; fall back to CPU if SPV not provided
+        _use_gpu_source = False
+        _src_dh_per_sec = None
+
+        if source_rate is not None and source_fn is None:
+            _src_dh_per_sec = np.asarray(source_rate, dtype=np.float32) * inv_area
+            if self._algo_source is None and hasattr(self, "_source_spv"):
+                self._build_source_algo(_src_dh_per_sec)
+            elif self._algo_source is not None and hasattr(self, "t_source"):
+                # Update the source tensor with the new rates (e.g. when resuming a phase)
+                self._upload(self.t_source, _src_dh_per_sec)
+            if self._algo_source is not None:
+                _use_gpu_source = True
+
+        _t_offset = t_start if resume else 0.0
+        if resume:
+            snapshots: list[NDArray[np.float32]] = [self.download_h().copy()]
+            snap_times: list[float] = [t_start]
+        else:
+            snapshots = [self._h0.copy()]
+            snap_times = [0.0]
+        t_sim = _t_offset
+        step = 0
+        dt = dt_init
+        next_output_time = _t_offset + output_interval_s
+        _wall_start = _time.monotonic()
+        _last_log_wall = _wall_start
+        _LOG_INTERVAL = 10.0  # print progress every 10s wall-clock
+
+        # CFL recomputation interval — reuse dt between updates with safety margin.
+        # Set to 1 to recompute every step (safest; required when source rates are
+        # large or vary across phases, as the wave speed can change rapidly).
+        CFL_SAFETY = 0.8  # use 80% of CFL dt to account for wave speed changes
+
+        while t_sim < t_end:
+            dt = min(dt, t_end - t_sim, dt_max)
+
+            # ── CFL estimate (only every cfl_interval steps) ──────────────────
+            if step % cfl_interval == 0:
+                np.asarray(self.t_dtbuf.data())[0] = self._SENTINEL_F
+                self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_dtbuf])).eval()
+                self._mgr.sequence().record(
+                    kp.OpAlgoDispatch(self._algo_cfl_accum, _pc_cfl_accum(E, g, dt_, cfl))
+                ).eval()
+
+                self._mgr.sequence().record(
+                    kp.OpAlgoDispatch(self._algo_cfl_reduce, _pc_cfl_reduce(N, g, dt_, cfl))
+                ).eval()
+                dt_cfl = self._read_dt()
+
+                if dt_cfl < 1e-10:
+                    if progress:
+                        sys.stdout.write(
+                            f"[solver][step {step}] CFL dt too small ({dt_cfl:.3e}), stopping\n"
+                        )
+                        sys.stdout.flush()
+                    break
+                if dt_cfl < 1e10:
+                    # Real CFL estimate — update dt
+                    dt = min(dt_cfl * CFL_SAFETY, dt_max)
+                # else: all-dry domain returned sentinel; keep current dt (dt_init)
+            dt = min(dt, t_end - t_sim)
+
+            # ── Heun stage 0 — predictor ──────────────────────────────────────
+            self._mgr.sequence().record(
+                kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 0))
+            ).eval()
+            self._mgr.sequence().record(
+                kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl))
+            ).eval()
+
+            # ── Heun stage 1 — corrector ──────────────────────────────────────
+            self._mgr.sequence().record(
+                kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 1))
+            ).eval()
+            self._mgr.sequence().record(
+                kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl))
+            ).eval()
+
+            # ── Source term (GPU kernel — no CPU round-trip) ──────────────────
+            if _use_gpu_source:
+                self._mgr.sequence().record(
+                    kp.OpAlgoDispatch(self._algo_source, [float(N), float(dt)])
+                ).eval()
+            elif not _use_gpu_source:
+                if source_fn is not None:
+                    src = np.asarray(source_fn(t_sim), dtype=np.float32)
+                    dh_src = dt * src * inv_area
+                    h_cur = self._download(self.t_h)
+                    h_cur += dh_src
+                    np.maximum(h_cur, 0.0, out=h_cur)
+                    self._upload(self.t_h, h_cur)
+                elif _src_dh_per_sec is not None:
+                    dh_src = dt * _src_dh_per_sec
+                    h_cur = self._download(self.t_h)
+                    h_cur += dh_src
+                    np.maximum(h_cur, 0.0, out=h_cur)
+                    self._upload(self.t_h, h_cur)
+
+            t_sim += dt
+            step += 1
+
+            # ── Periodic wall-clock progress (every 10 s, always) ────────────
+            _now = _time.monotonic()
+            if _now - _last_log_wall >= _LOG_INTERVAL:
+                _wall_elapsed = _now - _wall_start
+                _pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
+                _last_log_wall = _now
+                if progress:
+                    _eta = (
+                        (_wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
+                        if t_sim > 1e-12
+                        else float("inf")
+                    )
+                    _eta_str = f"{_eta:.1f}s" if np.isfinite(_eta) else "inf"
+                    sys.stdout.write(
+                        f"[solver][step {step}] sim={t_sim:.2f}/{t_end:.2f}s "
+                        f"({_pct:.1f}%) dt={dt:.4f} eta~{_eta_str}\n"
+                    )
+                    sys.stdout.flush()
+
+            if t_sim >= next_output_time:
+                h_snap = self.download_h()
+                if not np.isfinite(h_snap).all():
+                    snapshots.append(np.nan_to_num(h_snap, nan=0.0, posinf=0.0).copy())
+                    snap_times.append(t_sim)
+                    break
+                if progress:
+                    _wall_elapsed = _time.monotonic() - _wall_start
+                    _snap_idx = len(snapshots)
+                    sys.stdout.write(
+                        f"[solver] snapshot {_snap_idx} captured at t={t_sim:.2f}s "
+                        f"(wall={_wall_elapsed:.1f}s)\n"
+                    )
+                    sys.stdout.flush()
+                snapshots.append(h_snap.copy())
+                snap_times.append(t_sim)
+                next_output_time += output_interval_s
+
+        h_final = self.download_h()
+        if not snapshots or not np.allclose(snapshots[-1], h_final):
+            snapshots.append(h_final.copy())
+            snap_times.append(t_sim)
+
+        return snapshots, snap_times

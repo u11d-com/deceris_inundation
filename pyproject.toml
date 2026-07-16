@@ -1,0 +1,116 @@
+[project]
+name = "deceris-inundation"
+version = "0.1.0"
+description = "Standalone Vulkan SWE mesh solver for flood inundation modeling."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.24,<2.0",
+    "hilbertcurve>=2.0",
+]
+
+[project.optional-dependencies]
+mesh-parquet = ["pyarrow", "shapely>=2.0"]
+mesh-gis = ["geopandas>=0.14", "shapely>=2.0", "rasterio>=1.3", "pillow>=10.0"]
+viz = ["matplotlib>=3.8"]
+dev = ["ruff==0.15.7", "pyright==1.1.408", "pytest==9.0.2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["deceris"]
+
+# =============================================================================
+# Ruff — linter and formatter (trimmed scientific)
+# =============================================================================
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+indent-width = 4
+src = ["deceris", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "BLE",  # flake8-blind-except
+    "RUF",  # ruff-specific rules
+    "S",    # flake8-bandit (security)
+    "T20",  # flake8-print (no print statements in library code)
+    "RET",  # flake8-return
+    "TC",   # flake8-type-checking
+    "DTZ",  # flake8-datetimez
+    "PIE",  # flake8-pie
+    "C4",   # flake8-comprehensions
+    "ARG",  # flake8-unused-arguments
+]
+# DROPPED vs monorepo api config:
+#   ANN — too noisy on math-heavy solver signatures where parameters are
+#         self-evident from numerics; pyright strict covers type safety.
+#   D   — single-line docstrings already enforced by convention; pyright
+#         and pytest cover clarity, no need for docstring presence lint.
+#   PT  — repository uses plain assert + pytest.raises, not pytest-style
+#         fixtures/raises patterns that benefit from PT lint.
+
+ignore = [
+    "E501",  # line length enforced by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert is fine in tests
+    "S105",    # hardcoded password strings fine in test assertions
+    "S106",    # hardcoded passwords fine in test fixtures
+    "S107",    # hardcoded password defaults fine in test helpers
+    "BLE001",  # pytest.raises on framework errors
+]
+"deceris/inundation/benchmark_*.py" = [
+    "T201",    # print = CLI benchmark output
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["deceris"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+# =============================================================================
+# Pyright — strict + narrow ignores
+# =============================================================================
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+include = ["deceris", "tests"]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    "**/.git",
+]
+stubPath = "stubs"
+
+# Frameworks we depend on may omit PEP 561 markers. Pyright reads their
+# source while this setting suppresses only the missing-marker warning.
+reportMissingTypeStubs = false
+
+# kp (Kompute) ships neither py.typed nor a typing module (pybind11 C-ext,
+# no wheels, source-only). Covered by the hand-written stub at
+# stubs/kp/__init__.pyi (see stubPath above) instead of a blanket
+# reportUnknownMemberType=false — that stub IS the type-safety ceiling for
+# kp-touching code; extend it as usage grows rather than loosening this rule.
+
+# =============================================================================
+# Pytest
+# =============================================================================
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-markers"

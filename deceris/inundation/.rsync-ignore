@@ -1,0 +1,9 @@
+new/
+results/
+*.parquet
+*.npz
+__pycache__
+.tmp
+.venv
+inundation.sif
+sources.*

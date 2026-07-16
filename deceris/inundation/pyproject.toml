@@ -1,0 +1,61 @@
+# Scoped, independently pip/uv-installable package for the SWE solver.
+#
+# This lets the solver and benchmark harness be extracted and run on a remote
+# GPU node without the rest of the deceris monorepo.
+
+[project]
+name = "deceris-inundation"
+version = "0.1.0"
+description = "Standalone Vulkan SWE mesh solver for flood inundation modeling"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.24,<2.0",
+    "hilbertcurve>=2.0",
+]
+
+[project.optional-dependencies]
+# GeoParquet mesh format — what the real production mesh already uses.
+mesh-parquet = [
+    "pyarrow",
+    "shapely>=2.0",
+]
+# .gpkg / .shp / raster mesh formats — optional GIS loaders in swe_mesh.py.
+mesh-gis = [
+    "geopandas>=0.14",
+    "shapely>=2.0",
+    "rasterio>=1.3",
+    "pillow>=10.0",
+]
+# Existing Vulkan/Kompute backend. kp itself has no pre-built wheels and must
+# be built from patched source — see kp-patches/ and `just gpu-worker::build-kp`
+# (macOS dev machines) or build-kp-linux.sh (apptainer container %post).
+# Do NOT add kp as a plain dependency here.
+vulkan = []
+# Vulkan/Kompute is the solver backend.
+# Optional water-depth PNG output from the benchmark scripts (--plot-dir).
+# Kept out of the default install so headless GPU nodes don't need it.
+viz = [
+    "matplotlib>=3.8",
+]
+# In-repo Prefect/S3 integration (flow.py). Unused for standalone extraction.
+flow = [
+    "boto3",
+    "prefect-client",
+]
+
+# NOTE (§3.2): to keep `from deceris.inundation import ...` working identically
+# whether running inside the full monorepo or an extracted standalone copy,
+# an extracted copy should be laid out as:
+#   <extract-root>/deceris/__init__.py   (trivial near-empty stub)
+#   <extract-root>/deceris/inundation/   (this directory's contents)
+#   <extract-root>/pyproject.toml        (this file)
+# rather than renaming the package. This file's build target reflects that
+# extracted layout; when developing in-place inside the monorepo, the
+# top-level api/pyproject.toml + src/deceris/ layout is used instead and this
+# file is not installed.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["deceris"]
