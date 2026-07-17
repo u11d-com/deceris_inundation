@@ -19,6 +19,12 @@ from .swe_geometry import MeshGeometry, build_geometry, hilbert_reorder
 from .swe_geometry_cache import geometry_cache_key, load_geometry_cache, save_geometry_cache
 from .swe_mesh import load_mesh_file
 from .swe_shaders import SOURCE_GLSL, compile_all, compile_glsl
+from .swe_tuning import (
+    MIN_NDIM_NPY_INPUT,
+    NPY_COLS_HUV,
+    NPY_COLS_WITH_MANNING,
+    REQUIRED_CLI_ARGS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -37,13 +43,6 @@ if TYPE_CHECKING:
 INITIAL_STATE_METADATA_KEYS = frozenset(
     {"saved_order", "mesh_source", "t_end_s", "dt_max", "cfl_interval"}
 )
-
-# Constants for validation and configuration
-MIN_NUM_GPUS_MULTI = 2  # Minimum GPUs required for multi-GPU solver
-MIN_NDIM_NPY_INPUT = 2  # Minimum array dimensions for .npy state input
-NPY_COLS_HUV = 3  # Number of columns for (h, hu, hv) state
-NPY_COLS_WITH_MANNING = 4  # Number of columns including Manning coefficient
-REQUIRED_CLI_ARGS = 2  # Number of CLI arguments (script + mesh_source)
 
 
 @dataclass(frozen=True)

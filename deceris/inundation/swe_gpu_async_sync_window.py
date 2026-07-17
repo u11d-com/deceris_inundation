@@ -18,19 +18,19 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
-
-# Thresholds for CFL time step and simulation progression
-_CFL_MIN_DT = 1e-10  # Minimum CFL dt before raising error
-_TIME_EPSILON = 1e-12  # Epsilon for time/dt comparisons to avoid division by zero
+from .swe_tuning import (
+    CFL_EPSILON_MIN,
+    compute_eta_seconds,
+    compute_workgroups,
+)
 
 
 class SWESolverAsyncSyncWindow(SWESolver):
     """Async variant that submits many timesteps and synchronizes at output boundaries."""
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._work_group_size
-        wg_e = (int(np.ceil(E / WG)), 1, 1)
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, E = self.N, self.E
+        wg_e, wg_c = compute_workgroups(N, E, self._work_group_size)
         g, dt = self._g, self._dry_tol
 
         self._algo_flux_dtbuf = self._mgr.algorithm(
@@ -75,8 +75,8 @@ class SWESolverAsyncSyncWindow(SWESolver):
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build source kernel that reads dt from dt buffer."""
-        N, WG = self.N, self._work_group_size
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N = self.N
+        _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
         self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()
@@ -177,7 +177,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 cfl_seq.eval()
                 dt = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
-                if dt < _CFL_MIN_DT:
+                if dt < CFL_EPSILON_MIN:
                     raise RuntimeError(f"CFL dt too small at step {step}: {dt:.3e}")
             else:
                 np.asarray(self.t_dtbuf.data())[0] = np.float32(dt)
@@ -215,11 +215,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
             if progress and now - last_log_wall >= log_interval:
                 wall_elapsed = now - wall_start
                 pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
-                eta = (
-                    (wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
-                    if t_sim > _TIME_EPSILON
-                    else float("inf")
-                )
+                eta = compute_eta_seconds(wall_elapsed, t_sim, 0.0, t_end)
                 eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"
                 sys.stdout.write(
                     f"[solver][step {step}] sim={t_sim:.2f}/{t_end:.2f}s "

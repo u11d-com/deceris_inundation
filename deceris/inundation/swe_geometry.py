@@ -23,6 +23,13 @@ import numpy as np
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.typing import NDArray
 
+from .swe_tuning import (
+    EDGE_LENGTH_EPSILON,
+    FACE_NDIM,
+    POLYGON_AREA_EPSILON,
+    POLYGON_CENTROID_EPSILON,
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data structures
 # ─────────────────────────────────────────────────────────────────────────────
@@ -91,16 +98,6 @@ class MeshGeometry:
     E: int
     V: int
     max_degree: int = 3
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Geometry numerical tolerances
-# ─────────────────────────────────────────────────────────────────────────────
-
-POLYGON_AREA_EPSILON = 1e-30  # Near-zero threshold for polygon area (degenerate cells)
-POLYGON_CENTROID_EPSILON = 1e-20  # Tolerance for cell centroid computation
-EDGE_LENGTH_EPSILON = 1e-30  # Near-zero threshold for edge length (degenerate edges)
-FACE_NDIM = 2  # Expected dimensionality of face array (flat or (N, degree))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

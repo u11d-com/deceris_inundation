@@ -26,21 +26,19 @@ try:
 except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
+from .swe_tuning import (
+    CFL_EPSILON_MIN,
+    CFL_SANITY_MAX,
+    SIMULATION_TIME_EPSILON,
+    compute_workgroups,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from numpy.typing import NDArray
 
     from .swe_geometry import MeshGeometry
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Numerical tolerances for CFL / time integration
-# ─────────────────────────────────────────────────────────────────────────────
-
-CFL_EPSILON_MIN = 1e-10  # Minimum CFL dt threshold (essentially stalled / no wave motion)
-CFL_SANITY_MAX = 1e10  # Upper sanity bound for CFL dt (should never exceed this)
-SIMULATION_TIME_EPSILON = 1e-12  # Threshold to distinguish zero vs. nonzero simulation time
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -208,9 +206,8 @@ class SWESolver:
         self._mgr.sequence().record(kp.OpTensorSyncDevice(self._all_tensors)).eval()
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._work_group_size
-        wg_e = (int(np.ceil(E / WG)), 1, 1)
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, E = self.N, self.E
+        wg_e, wg_c = compute_workgroups(N, E, self._work_group_size)
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
@@ -251,8 +248,8 @@ class SWESolver:
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build the GPU source kernel using a separate tensor list."""
-        N, WG = self.N, self._work_group_size
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N = self.N
+        _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
         self.t_source = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [self.t_h, self.t_source]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source])).eval()

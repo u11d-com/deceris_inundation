@@ -3,29 +3,31 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import statistics
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Literal
 
 import numpy as np
 
+from deceris.inundation.benchmark_common import (
+    RunFingerprint,
+    all_invariants_ok,
+    assert_deterministic,
+    build_fingerprint,
+    build_pipeline_like_phases,
+    compare_fingerprints_exact,
+    save_depth_png,
+)
+from deceris.inundation.benchmark_common import (
+    median_wall as _median_wall,
+)
 from deceris.inundation.solver_workflow import (
-    PointSource,
-    SimulationPhase,
     SWEWorkflow,
     WorkflowConfig,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from matplotlib.axes import Axes
-    from matplotlib.figure import Figure
-    from numpy.typing import NDArray
 
 DEFAULT_MESH_PATH = (
     "api/seed/tool/.state/tasks/flood_mesh/downloads/powiat-klodzki-mesh-280k.parquet"
@@ -41,202 +43,6 @@ DEFAULT_SOLVER_IMPLS = ("batched_submit", "fixed_dt_batch")
 ComparedSolver = Literal[
     "batched_submit", "async_sync_window", "fixed_dt_batch", "gpu_resident_batch"
 ]
-
-# Benchmark validation thresholds
-MIN_VALID_CELLS = 2  # Mesh must contain at least this many valid cells
-MIN_SNAPSHOTS = 10  # Minimum number of output snapshots required
-FINAL_TIME_TOLERANCE_S = 5.0  # Max allowed deviation from expected final time
-MIN_DEPTH_THRESHOLD_M = 0.05  # Minimum water depth threshold
-WET_CELL_THRESHOLD = 1e-6  # Threshold for counting a cell as wet
-MIN_WET_CELLS = 100  # Minimum number of wet cells required
-MIN_VOLUME_RATIO = 0.01  # Minimum acceptable volume ratio
-
-
-@dataclass(frozen=True)
-class RunFingerprint:
-    """Stable fingerprint + invariants for one simulation run."""
-
-    run_index: int
-    solver_impl: str
-    snap_count: int
-    snap_times: list[float]
-    snap_times_hash: str
-    snapshot_hashes: list[str]
-    h_final_hash: str
-    volume_final_bits: int
-    volume_injected_bits: int
-    max_depth: float
-    wet_cells_final: int
-    wall_seconds: float
-    invariant_ok: bool
-    invariant_reason: str
-
-
-def _save_depth_png(
-    workflow: SWEWorkflow, h_final: NDArray[np.float32], t_final_s: float, out_path: Path
-) -> None:
-    """Save a water-depth PNG (see new/workflow.py for the plotting recipe this mirrors).
-
-    Requires matplotlib — install via ``uv pip install -e ".[viz]"`` or
-    ``pip install -r requirements.txt`` (both now include it). Imported lazily
-    so benchmark runs without --plot-dir never need matplotlib installed.
-    """
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from matplotlib.collections import PolyCollection
-        from matplotlib.colors import LinearSegmentedColormap, Normalize
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "matplotlib is required for --plot-dir. Install with: "
-            'uv pip install -e ".[viz]" (or pip install -r requirements.txt)'
-        ) from exc
-
-    if workflow.geom is None or workflow.perm is None:
-        raise RuntimeError("Workflow must be prepared before plotting depth")
-
-    verts = workflow.verts
-    faces_flat = workflow.faces_flat
-    face_offsets = workflow.face_offsets
-    if verts is None or faces_flat is None or face_offsets is None:
-        # Geometry-cache hit path (solver_workflow.py's prepare()) skips
-        # load_mesh_file entirely, so verts/faces_flat/face_offsets are never
-        # populated on the workflow — the cached .npz only stores geom+perm,
-        # not raw mesh vertices. Re-read the mesh file just for plotting.
-        from deceris.inundation.swe_mesh import load_mesh_file
-
-        sys.stdout.write(f"[plot] re-loading mesh for plotting: {workflow.config.mesh_source}\n")
-        sys.stdout.flush()
-        verts, faces_flat, face_offsets, _zb_from_file = load_mesh_file(workflow.config.mesh_source)
-
-    perm = workflow.perm
-    n_cells = workflow.geom.area.shape[0]
-
-    polygons_reordered: list[NDArray[np.float32]] = []
-    for new_i in range(n_cells):
-        old_i = int(perm[new_i])
-        idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
-        polygons_reordered.append(verts[idx])
-
-    water_cmap_offset = 0.28
-    water_base: NDArray[np.floating[Any]] = cast(
-        "NDArray[np.floating[Any]]",
-        cast("Any", plt.cm.Blues)(np.linspace(water_cmap_offset, 1.0, 256)),
-    )
-    water_cmap = LinearSegmentedColormap.from_list("BluesOffset", water_base)
-
-    _plt: Any = plt
-    fig_ax: tuple[Figure, Axes] = cast("tuple[Figure, Axes]", _plt.subplots(1, 1, figsize=(13, 5)))
-    fig, ax = fig_ax
-    pc = PolyCollection(
-        polygons_reordered,
-        array=h_final,
-        cmap=water_cmap,
-        edgecolors="face",
-        linewidths=0.1,
-        norm=Normalize(vmin=0.0, vmax=4.0),
-    )
-    ax.add_collection(pc)
-    ax.set_xlim(verts[:, 0].min(), verts[:, 0].max())
-    ax.set_ylim(verts[:, 1].min(), verts[:, 1].max())
-    cast("Any", fig).colorbar(pc, ax=ax, label="h [m]")
-    ax.set_aspect("equal")
-    cast("Any", ax).set_title(f"Water depth at t={t_final_s:.1f}s")
-    cast("Any", ax).set_xlabel("x")
-    cast("Any", ax).set_ylabel("y")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    cast("Any", fig).savefig(out_path, dpi=300)
-    plt.close(fig)
-    sys.stdout.write(f"[plot] water-depth PNG saved: {out_path}\n")
-    sys.stdout.flush()
-
-
-def _hash_array(arr: NDArray[np.floating[Any]]) -> str:
-    a = np.ascontiguousarray(arr)
-    data = a.view(np.uint8).tobytes()
-    return hashlib.blake2b(data, digest_size=32).hexdigest()
-
-
-def _float64_bits(value: float) -> int:
-    return int(np.asarray([value], dtype=np.float64).view(np.uint64)[0])
-
-
-def _build_pipeline_like_phases(
-    workflow: SWEWorkflow, phase_duration_s: float
-) -> list[SimulationPhase]:
-    """Return deterministic two-phase schedule resembling production threat runs."""
-    if workflow.geom is None:
-        raise RuntimeError("Workflow must be prepared before building benchmark phases")
-
-    valid = workflow.geom.area > workflow.config.area_tol
-    valid_indices = np.flatnonzero(valid)
-    if valid_indices.size < MIN_VALID_CELLS:
-        raise RuntimeError("Benchmark mesh must contain at least two valid cells")
-    sorted_indices = valid_indices[np.argsort(workflow.geom.centroid[valid_indices, 0])]
-    source_a = int(sorted_indices[sorted_indices.size // 3])
-    source_b = int(sorted_indices[(sorted_indices.size * 2) // 3])
-    radius_a = max(1.0, float(np.sqrt(workflow.geom.area[source_a] / np.pi)))
-    radius_b = max(1.0, float(np.sqrt(workflow.geom.area[source_b] / np.pi)))
-    center_a = (
-        float(workflow.geom.centroid[source_a, 0]),
-        float(workflow.geom.centroid[source_a, 1]),
-    )
-    center_b = (
-        float(workflow.geom.centroid[source_b, 0]),
-        float(workflow.geom.centroid[source_b, 1]),
-    )
-
-    return [
-        SimulationPhase(
-            duration_s=phase_duration_s,
-            sources=[
-                PointSource(300.0, center_a, radius_a),
-                PointSource(306.0, center_b, radius_b),
-            ],
-        ),
-        SimulationPhase(
-            duration_s=phase_duration_s,
-            sources=[
-                PointSource(320.0, center_a, radius_a),
-                PointSource(314.5, center_b, radius_b),
-            ],
-        ),
-    ]
-
-
-def _validate_run_invariants(
-    snap_times: NDArray[np.floating[Any]],
-    snapshots: Sequence[NDArray[np.floating[Any]]],
-    h_final: NDArray[np.floating[Any]],
-    volume_final: float,
-    volume_injected: float,
-    expected_final_time_s: float,
-) -> tuple[bool, str]:
-    """Validate production-like correctness invariants for one run."""
-    if len(snapshots) < MIN_SNAPSHOTS:
-        return False, f"too_few_snapshots:{len(snapshots)}"
-    if not np.all(np.diff(snap_times) >= 0.0):
-        return False, "non_monotonic_snap_times"
-    if abs(snap_times[-1] - expected_final_time_s) > FINAL_TIME_TOLERANCE_S:
-        return False, f"unexpected_final_time:{snap_times[-1]:.3f}"
-    max_depth = float(np.max(h_final))
-    if max_depth <= MIN_DEPTH_THRESHOLD_M:
-        return False, f"max_depth_too_small:{max_depth:.6f}"
-    wet_cells_final = int(np.count_nonzero(h_final > WET_CELL_THRESHOLD))
-    if wet_cells_final < MIN_WET_CELLS:
-        return False, f"too_few_wet_cells:{wet_cells_final}"
-    if volume_injected <= 0.0:
-        return False, f"invalid_volume_injected:{volume_injected:.3f}"
-    vol_ratio = volume_final / volume_injected
-    if vol_ratio < MIN_VOLUME_RATIO:
-        return False, f"volume_ratio_too_small:{vol_ratio:.6f}"
-    if not np.isfinite(vol_ratio):
-        return False, "volume_ratio_non_finite"
-    return True, "ok"
 
 
 def _run_once(
@@ -263,56 +69,19 @@ def _run_once(
     )
     workflow = SWEWorkflow(config)
     workflow.prepare()
-    result = workflow.run(_build_pipeline_like_phases(workflow, phase_duration_s))
-
-    snap_times = np.asarray(result.snap_times, dtype=np.float64)
-    snapshots = [np.asarray(s, dtype=np.float32) for s in result.snapshots]
-    h_final = np.asarray(result.h_final, dtype=np.float32)
+    result = workflow.run(build_pipeline_like_phases(workflow, phase_duration_s))
 
     if plot_path is not None:
-        _save_depth_png(workflow, h_final, float(snap_times[-1]), plot_path)
+        snap_times_for_plot = np.asarray(result.snap_times, dtype=np.float64)
+        h_final_for_plot = np.asarray(result.h_final, dtype=np.float32)
+        save_depth_png(workflow, h_final_for_plot, float(snap_times_for_plot[-1]), plot_path)
 
-    invariant_ok, invariant_reason = _validate_run_invariants(
-        snap_times=snap_times,
-        snapshots=snapshots,
-        h_final=h_final,
-        volume_final=float(result.volume_final_m3),
-        volume_injected=float(result.volume_injected_m3),
-        expected_final_time_s=phase_duration_s * 2.0,
-    )
-
-    return RunFingerprint(
+    return build_fingerprint(
         run_index=run_index,
         solver_impl=solver_impl,
-        snap_count=len(snapshots),
-        snap_times=[float(t) for t in snap_times],
-        snap_times_hash=_hash_array(snap_times),
-        snapshot_hashes=[_hash_array(snapshot) for snapshot in snapshots],
-        h_final_hash=_hash_array(h_final),
-        volume_final_bits=_float64_bits(result.volume_final_m3),
-        volume_injected_bits=_float64_bits(result.volume_injected_m3),
-        max_depth=float(np.max(h_final)),
-        wet_cells_final=int(np.count_nonzero(h_final > WET_CELL_THRESHOLD)),
-        wall_seconds=float(result.wall_seconds),
-        invariant_ok=invariant_ok,
-        invariant_reason=invariant_reason,
+        result=result,
+        expected_final_time_s=phase_duration_s * 2.0,
     )
-
-
-def _compare(a: RunFingerprint, b: RunFingerprint) -> tuple[bool, str]:
-    if a.snap_count != b.snap_count:
-        return False, f"snap_count mismatch: {a.snap_count} != {b.snap_count}"
-    if a.snap_times_hash != b.snap_times_hash:
-        return False, "snap_times_hash mismatch"
-    if a.snapshot_hashes != b.snapshot_hashes:
-        return False, "snapshot_hashes mismatch"
-    if a.h_final_hash != b.h_final_hash:
-        return False, "h_final_hash mismatch"
-    if a.volume_final_bits != b.volume_final_bits:
-        return False, "volume_final_bits mismatch"
-    if a.volume_injected_bits != b.volume_injected_bits:
-        return False, "volume_injected_bits mismatch"
-    return True, "ok"
 
 
 def _run_group(
@@ -399,24 +168,8 @@ def _run_group(
             encoding="utf-8",
         )
 
-    median_wall = statistics.median(fp.wall_seconds for fp in runs)
-    return runs, median_wall
-
-
-def _assert_deterministic(runs: list[RunFingerprint]) -> tuple[bool, str]:
-    reference = runs[0]
-    for index, run in enumerate(runs[1:], start=1):
-        ok, reason = _compare(reference, run)
-        if not ok:
-            return False, f"run0 vs run{index}: {reason}"
-    return True, "ok"
-
-
-def _all_invariants_ok(runs: list[RunFingerprint]) -> tuple[bool, str]:
-    for run in runs:
-        if not run.invariant_ok:
-            return False, f"run{run.run_index}:{run.invariant_reason}"
-    return True, "ok"
+    median_wall_value = _median_wall(runs)
+    return runs, median_wall_value
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -503,7 +256,7 @@ def main() -> int:
 
     solver_runs: dict[str, list[RunFingerprint]] = {}
     solver_medians: dict[str, float] = {}
-    solver_det: dict[str, tuple[bool, str]] = {}
+    solver_det: dict[str, tuple[bool | None, str]] = {}
     solver_inv: dict[str, tuple[bool, str]] = {}
 
     for solver_impl in args.solvers:
@@ -522,8 +275,8 @@ def main() -> int:
         )
         solver_runs[solver_impl] = runs
         solver_medians[solver_impl] = median
-        solver_det[solver_impl] = _assert_deterministic(runs)
-        solver_inv[solver_impl] = _all_invariants_ok(runs)
+        solver_det[solver_impl] = assert_deterministic(runs)
+        solver_inv[solver_impl] = all_invariants_ok(runs)
 
     batched_submit_runs = solver_runs.get("batched_submit")
     batched_submit_median = solver_medians.get("batched_submit")
@@ -532,7 +285,9 @@ def main() -> int:
         for solver_impl, runs in solver_runs.items():
             if solver_impl == "batched_submit":
                 continue
-            parity[f"batched_submit_vs_{solver_impl}"] = _compare(batched_submit_runs[0], runs[0])
+            parity[f"batched_submit_vs_{solver_impl}"] = compare_fingerprints_exact(
+                batched_submit_runs[0], runs[0]
+            )
 
     baseline_det_ok = None
     baseline_det_reason = None
@@ -562,25 +317,25 @@ def main() -> int:
             args.cfl_interval,
             plot_dir,
         )
-        baseline_det_ok, baseline_det_reason = _assert_deterministic(baseline_runs)
-        baseline_inv_ok, baseline_inv_reason = _all_invariants_ok(baseline_runs)
+        baseline_det_ok, baseline_det_reason = assert_deterministic(baseline_runs)
+        baseline_inv_ok, baseline_inv_reason = all_invariants_ok(baseline_runs)
         if "batched_submit" in solver_runs:
             batched_submit_vs_baseline_parity_ok, batched_submit_vs_baseline_parity_reason = (
-                _compare(
+                compare_fingerprints_exact(
                     baseline_runs[0],
                     solver_runs["batched_submit"][0],
                 )
             )
         if "async_sync_window" in solver_runs:
             async_sync_window_vs_baseline_parity_ok, async_sync_window_vs_baseline_parity_reason = (
-                _compare(
+                compare_fingerprints_exact(
                     baseline_runs[0],
                     solver_runs["async_sync_window"][0],
                 )
             )
         if "fixed_dt_batch" in solver_runs:
             fixed_dt_batch_vs_baseline_parity_ok, fixed_dt_batch_vs_baseline_parity_reason = (
-                _compare(
+                compare_fingerprints_exact(
                     baseline_runs[0],
                     solver_runs["fixed_dt_batch"][0],
                 )
@@ -589,7 +344,7 @@ def main() -> int:
             (
                 gpu_resident_batch_vs_baseline_parity_ok,
                 gpu_resident_batch_vs_baseline_parity_reason,
-            ) = _compare(
+            ) = compare_fingerprints_exact(
                 baseline_runs[0],
                 solver_runs["gpu_resident_batch"][0],
             )

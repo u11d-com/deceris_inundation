@@ -12,6 +12,7 @@ import kp
 import numpy as np
 
 from .swe_gpu import SWESolver, _pc_cfl_accum, _pc_cfl_reduce
+from .swe_tuning import compute_workgroups
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -25,9 +26,8 @@ class SWESolverGpuResidentBatch(SWESolver):
     _BATCH_STEPS = 10
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, work_group_size = self.N, self.E, self._work_group_size
-        wg_e = (int(np.ceil(E / work_group_size)), 1, 1)
-        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
+        N, E = self.N, self.E
+        wg_e, wg_c = compute_workgroups(N, E, self._work_group_size)
         g, dt = self._g, self._dry_tol
 
         self._algo_flux_dtbuf = self._mgr.algorithm(
@@ -107,8 +107,8 @@ class SWESolverGpuResidentBatch(SWESolver):
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build source kernel that reads dt from dt buffer."""
-        N, work_group_size = self.N, self._work_group_size
-        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
+        N = self.N
+        _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
         self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()

@@ -18,11 +18,12 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
-
-# CFL time-stepping sentinels (imported from swe_gpu but cached locally for clarity)
-CFL_COLLAPSE_THRESHOLD = 1e-10  # Below this, CFL dt indicates collapse
-CFL_INVALID_SENTINEL = 1e10  # Sentinel value for uninitialized/invalid CFL
-DT_MIN_STEP = 1e-12  # Minimum time step threshold
+from .swe_tuning import (
+    CFL_EPSILON_MIN,
+    CFL_SANITY_MAX,
+    SIMULATION_TIME_EPSILON,
+    compute_eta_seconds,
+)
 
 
 class SWESolverFixedDtBatch(SWESolver):
@@ -90,9 +91,9 @@ class SWESolverFixedDtBatch(SWESolver):
             cfl_seq.record(kp.OpTensorSyncLocal([self.t_dtbuf]))
             cfl_seq.eval()
             dt_cfl = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
-            if dt_cfl < CFL_COLLAPSE_THRESHOLD:
+            if dt_cfl < CFL_EPSILON_MIN:
                 raise RuntimeError(f"CFL dt too small at step {step}: {dt_cfl:.3e}")
-            if dt_cfl < CFL_INVALID_SENTINEL:
+            if dt_cfl < CFL_SANITY_MAX:
                 dt = min(dt_cfl * cfl_safety, dt_max)
 
             batch_steps = max(1, int(cfl_interval))
@@ -106,7 +107,7 @@ class SWESolverFixedDtBatch(SWESolver):
             step_t = t_sim
             for _ in range(batch_steps):
                 step_dt = min(dt, t_end - step_t, next_output_time - step_t)
-                if step_dt <= DT_MIN_STEP:
+                if step_dt <= SIMULATION_TIME_EPSILON:
                     break
                 step_dts.append(step_dt)
                 step_t += step_dt
@@ -149,11 +150,7 @@ class SWESolverFixedDtBatch(SWESolver):
             if progress and now - last_log_wall >= log_interval:
                 wall_elapsed = now - wall_start
                 pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
-                eta = (
-                    (wall_elapsed / max(t_sim - t_offset, 1e-12)) * max(t_end - t_sim, 0.0)
-                    if t_sim > t_offset
-                    else float("inf")
-                )
+                eta = compute_eta_seconds(wall_elapsed, t_sim, t_offset, t_end)
                 eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"
                 sys.stdout.write(
                     f"[solver][batch {step}] sim={t_sim:.2f}/{t_end:.2f}s "

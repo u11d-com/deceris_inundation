@@ -50,3 +50,11 @@ just check          # all of the above, in order
 opencode is configured to auto-run `just format-file <file>` (ruff) after
 edits, and to use `just pyright-lsp` for live pyright diagnostics — both exec
 into the same persistent `dev` container.
+
+## Shared modules
+
+Cross-module constants + helpers in `swe_tuning.py`. Benchmark
+fingerprint + invariant/compare/deterministic/plot helpers in
+`benchmark_common.py`. **Import from these; do not redefine locally.**
+
+Verification: `just check`.

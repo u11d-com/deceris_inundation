@@ -17,11 +17,11 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
-
-# CFL time-stepping sentinels (imported from swe_gpu but cached locally for clarity)
-CFL_COLLAPSE_THRESHOLD = 1e-10  # Below this, CFL dt indicates collapse
-CFL_INVALID_SENTINEL = 1e10  # Sentinel value for uninitialized/invalid CFL
-DT_MIN_STEP = 1e-12  # Minimum time step threshold
+from .swe_tuning import (
+    CFL_EPSILON_MIN,
+    CFL_SANITY_MAX,
+    compute_eta_seconds,
+)
 
 
 class SWESolverBatchedSubmit(SWESolver):
@@ -95,14 +95,14 @@ class SWESolverBatchedSubmit(SWESolver):
                 cfl_seq.eval()
                 dt_cfl = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
-                if dt_cfl < CFL_COLLAPSE_THRESHOLD:
+                if dt_cfl < CFL_EPSILON_MIN:
                     if progress:
                         sys.stdout.write(
                             f"[solver][step {step}] CFL dt too small ({dt_cfl:.3e}), stopping\n"
                         )
                         sys.stdout.flush()
                     break
-                if dt_cfl < CFL_INVALID_SENTINEL:
+                if dt_cfl < CFL_SANITY_MAX:
                     dt = min(dt_cfl * cfl_safety, dt_max)
             dt = min(dt, t_end - t_sim)
 
@@ -141,11 +141,7 @@ class SWESolverBatchedSubmit(SWESolver):
                 if progress:
                     wall_elapsed = now - wall_start
                     pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
-                    eta = (
-                        (wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
-                        if t_sim > DT_MIN_STEP
-                        else float("inf")
-                    )
+                    eta = compute_eta_seconds(wall_elapsed, t_sim, 0.0, t_end)
                     eta_str = f"{eta:.1f}s" if np.isfinite(eta) else "inf"
                     sys.stdout.write(
                         f"[solver][step {step}] sim={t_sim:.2f}/{t_end:.2f}s "

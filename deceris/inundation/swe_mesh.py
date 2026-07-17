@@ -14,8 +14,7 @@ Usage
 import numpy as np
 from numpy.typing import NDArray
 
-# Mesh geometry constraints
-MIN_POLYGON_VERTICES = 3  # Minimum vertices for a valid polygon/face
+from .swe_tuning import MIN_POLYGON_VERTICES
 
 
 def load_mesh_file(
