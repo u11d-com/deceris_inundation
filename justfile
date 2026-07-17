@@ -17,13 +17,14 @@ up:
 down:
     docker compose down
 
-# Regenerate uv.lock from pyproject.toml. Uses a plain uv image (pinned to
-# the same uv version as the Dockerfile) instead of the dev image, since the
-# dev image's own build depends on uv.lock already existing (COPY + --frozen)
-# — resolving the lock can't depend on the frozen install it produces.
+# Regenerate uv.lock from pyproject.toml. Uses the official astral/uv image
+# pinned to the newest published 0.11.x with python3.12-bookworm — same
+# version as the Dockerfile's install-script pin. Both stay in sync. The
+# dev image's own build depends on uv.lock already existing (COPY +
+# --frozen), so resolving the lock can't run inside the dev image.
 lock:
     docker run --rm -v "$(pwd):/workspace" -w /workspace \
-        ghcr.io/astral-sh/uv:0.11.21-python3.12-bookworm uv lock
+        astral/uv:0.11.29-python3.12-trixie uv lock
 
 lint:
     {{docker_prefix}} uv run ruff check .
@@ -46,8 +47,26 @@ typecheck:
 test:
     {{docker_prefix}} uv run pytest
 
+# Lint markdown docs under docs/ + root README.md + AGENTS.md. Config at
+# repo root: .pymarkdown (passed via --config; pymarkdown does not auto-
+# discover). Archive under docs/archive/** is excluded via --exclude glob
+# (frozen historical snapshot; original prose formatting preserved as-is).
+mdlint:
+    {{docker_prefix}} uv run pymarkdown --config .pymarkdown scan -r \
+        -e "docs/archive/**" docs/ README.md AGENTS.md
+
+# Auto-fix markdown issues where mechanical (MD007 ul-indent, MD012 blanks,
+# MD013 line-length wraps, MD019/021 hash spacing, MD022/031/032 blank-line
+# around headings/fences/lists, MD035 hr-style, MD046 code-block-style, MD047
+# trailing-newline, MD048 code-fence-style). Non-fixable rules (MD040 fenced-
+# code-language, MD041 first-line-h1, MD024 dup-heading, MD025 single-h1,
+# etc.) still need manual touch-up. Always re-run `just mdlint` after.
+mdlint-fix:
+    {{docker_prefix}} uv run pymarkdown --config .pymarkdown fix -r \
+        -e "docs/archive/**" docs/ README.md AGENTS.md
+
 # Full CI gate.
-check: lint format-check typecheck test
+check: lint format-check typecheck mdlint test
 
 
 benchmark-lake *args:

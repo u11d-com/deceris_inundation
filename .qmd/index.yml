@@ -1,0 +1,29 @@
+global_context: "deceris-inundation SWE mesh solver — documentation"
+
+models:
+  embed: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+  generate: hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf
+  rerank: hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf
+
+collections:
+  architecture:
+    path: docs/architecture
+    context:
+      "/": "Vulkan solver pipeline, synchronization, mesh, and precision constraints."
+  integration:
+    path: docs/integration
+    context:
+      "/": "How to embed SWEWorkflow in a host Python app."
+  benchmarks:
+    path: docs/benchmarks
+    context:
+      "/": "Validation tests and baseline result logs (lake-at-rest)."
+  reference:
+    path: docs/reference
+    context:
+      "/": "Vulkan/Kompute build patches (macOS / CMake 4.x / MoltenVK)."
+  archive:
+    path: docs/archive
+    includeByDefault: false
+    context:
+      "/": "Historical originals retained for unrelated reference material."

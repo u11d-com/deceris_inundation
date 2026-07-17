@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned uv for reproducible builds.
-RUN curl -LsSf https://astral.sh/uv/0.11.21/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+RUN curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
 WORKDIR /opt/build
 COPY pyproject.toml uv.lock ./
