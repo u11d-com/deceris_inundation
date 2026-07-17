@@ -52,16 +52,45 @@ opencode is configured to auto-run `just format-file <file>` (ruff) after
 edits, and to use `just pyright-lsp` for live pyright diagnostics — both exec
 into the same persistent `dev` container.
 
-Pymarkdown config at `.pymarkdown` (strict defaults + 4 rule overrides:
-MD003 atx, MD007 indent:4, MD013 line_length:100 prose-only, MD024
-siblings_only). `docs/archive/**` excluded via `--exclude` glob (frozen
-historical snapshot, original prose preserved). When editing docs, also
-rewrite cross-references to new canonical paths under `docs/<tier>/...`.
-
 ## Shared modules
 
 Cross-module constants + helpers in `swe_tuning.py`. Benchmark
 fingerprint + invariant/compare/deterministic/plot helpers in
 `benchmark_common.py`. **Import from these; do not redefine locally.**
 
-Verification: `just check`.
+## Documentation
+
+**Reading/searching `docs/`: use the `qmd` skill** — it's indexed for
+search and retrieval; don't grep/read the tree by hand. **After adding,
+moving, or renaming any doc: re-run the `qmd` skill's update/embed step**
+so the index stays current — this is a required step of any docs change,
+not optional cleanup.
+
+`docs/` tiers — each answers a different question:
+
+| Tier | Answers | Update when |
+|---|---|---|
+| `architecture/` | What is this + why is it designed this way | Design changes (rare) |
+| `planning/roadmap.md` | What's next, in what order | Priorities shift, phase starts/completes |
+| `planning/decisions.md` | What was decided + why (append-only) | A tradeoff gets settled |
+| `implementation/NN-*/` | How a specific effort was built + what it measured | Every new engineering effort/experiment |
+| `implementation/benchmark.md` | Ledger: one row per effort, current status | Every time an `NN-*/results.md` changes |
+| `reference/` | Third-party build/setup notes | Rare |
+| `archive/` | Frozen originals, do not edit | Never (except full re-rework) |
+
+Rules:
+
+- New engineering effort → new `implementation/NN-<slug>/` folder, next
+  sequential number, `plan.md` + `results.md` (stub `not started` if work
+  hasn't begun). Add a row to `implementation/benchmark.md` and to
+  `docs/index.md`'s folder table.
+- Decision made (tradeoff resolved, default flipped, path rejected) →
+  append to `planning/decisions.md`, link the `implementation/` evidence.
+  Never rewrite past entries — it's a log.
+- Priorities change → edit `planning/roadmap.md` only.
+- `architecture/*.md` = current design/requirements only — no embedded
+  status prose or result tables. Link to `decisions.md` / `implementation/`
+  instead.
+- New top-level `docs/` folder → register in `.qmd/index.yml` and
+  `docs/index.md`'s tree table.
+- Run `just mdlint` after any docs edit, then re-embed via `qmd`.

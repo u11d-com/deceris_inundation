@@ -1,6 +1,13 @@
 # Lake-at-Rest Vulkan Baseline Plan
 
+<<<<<<< HEAD
 ## Goal
+=======
+Referenced from `../../architecture/validation-plan.md` §1 (Tier 1 validation). This file
+is a self-contained work order: it can be executed today, before any CUDA
+code exists, and does not require external data, the 5M-cell mesh, or GPU
+cluster access.
+>>>>>>> 2f36b6f (fix: Docs rework 2)
 
 Measure still-water behavior over non-flat bathymetry and protect the Vulkan
 synchronization fix with a reproducible numerical baseline.
