@@ -10,18 +10,22 @@ collections:
     path: docs/architecture
     context:
       "/": "Vulkan solver pipeline, synchronization, mesh, and precision constraints."
+  planning:
+    path: docs/planning
+    context:
+      "/": "Roadmap and settled engineering decisions."
+  implementation:
+    path: docs/implementation
+    context:
+      "/": "Vulkan and shared benchmark plans, measurements, and conclusions."
   integration:
     path: docs/integration
     context:
-      "/": "How to embed SWEWorkflow in a host Python app."
-  benchmarks:
-    path: docs/benchmarks
-    context:
-      "/": "Validation tests and baseline result logs (lake-at-rest)."
+      "/": "How to embed SWEWorkflow in a host Python application."
   reference:
     path: docs/reference
     context:
-      "/": "Vulkan/Kompute build patches (macOS / CMake 4.x / MoltenVK)."
+      "/": "Vulkan and Kompute build notes."
   archive:
     path: docs/archive
     includeByDefault: false

@@ -15,8 +15,7 @@ Vulkan/Kompute executes the timestep kernels.
 
 `fixed_dt_batch_barrier` is the validated barrier-based reference.
 `gpu_resident_batch` keeps control state on the device to reduce host
-synchronization. Solver arrays use float32; reporting may accumulate in wider
-host-side arithmetic.
+synchronization.
 
 ## Synchronization
 
@@ -32,4 +31,4 @@ adjacency, and packed signed edge orientation. CSR offsets are int32 and reject
 meshes whose slot count would overflow. Initial and warm-start states preserve
 depth and both momentum components.
 
-See the lake-at-rest evidence under `../benchmarks/`.
+See `../implementation/00-lake-at-rest/` for retained evidence.
