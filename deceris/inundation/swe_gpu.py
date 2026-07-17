@@ -35,6 +35,15 @@ if TYPE_CHECKING:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Numerical tolerances for CFL / time integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+CFL_EPSILON_MIN = 1e-10  # Minimum CFL dt threshold (essentially stalled / no wave motion)
+CFL_SANITY_MAX = 1e10  # Upper sanity bound for CFL dt (should never exceed this)
+SIMULATION_TIME_EPSILON = 1e-12  # Threshold to distinguish zero vs. nonzero simulation time
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Push-constant helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -105,7 +114,7 @@ class SWESolver:
         self._g = float(g)
         self._dry_tol = float(dry_tol)
         self._cfl = float(cfl)
-        self._WG = workgroup_size
+        self._work_group_size = workgroup_size
 
         self._h0 = h0.astype(np.float32)
         self._area = geom.area
@@ -199,7 +208,7 @@ class SWESolver:
         self._mgr.sequence().record(kp.OpTensorSyncDevice(self._all_tensors)).eval()
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._WG
+        N, E, WG = self.N, self.E, self._work_group_size
         wg_e = (int(np.ceil(E / WG)), 1, 1)
         wg_c = (int(np.ceil(N / WG)), 1, 1)
         g, dt = self._g, self._dry_tol
@@ -242,7 +251,7 @@ class SWESolver:
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build the GPU source kernel using a separate tensor list."""
-        N, WG = self.N, self._WG
+        N, WG = self.N, self._work_group_size
         wg_c = (int(np.ceil(N / WG)), 1, 1)
         self.t_source = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [self.t_h, self.t_source]
@@ -414,14 +423,14 @@ class SWESolver:
                 ).eval()
                 dt_cfl = self._read_dt()
 
-                if dt_cfl < 1e-10:
+                if dt_cfl < CFL_EPSILON_MIN:
                     if progress:
                         sys.stdout.write(
                             f"[solver][step {step}] CFL dt too small ({dt_cfl:.3e}), stopping\n"
                         )
                         sys.stdout.flush()
                     break
-                if dt_cfl < 1e10:
+                if dt_cfl < CFL_SANITY_MAX:
                     # Real CFL estimate — update dt
                     dt = min(dt_cfl * CFL_SAFETY, dt_max)
                 # else: all-dry domain returned sentinel; keep current dt (dt_init)
@@ -475,7 +484,7 @@ class SWESolver:
                 if progress:
                     _eta = (
                         (_wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
-                        if t_sim > 1e-12
+                        if t_sim > SIMULATION_TIME_EPSILON
                         else float("inf")
                     )
                     _eta_str = f"{_eta:.1f}s" if np.isfinite(_eta) else "inf"

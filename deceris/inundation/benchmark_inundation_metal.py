@@ -42,6 +42,15 @@ ComparedSolver = Literal[
     "batched_submit", "async_sync_window", "fixed_dt_batch", "gpu_resident_batch"
 ]
 
+# Benchmark validation thresholds
+MIN_VALID_CELLS = 2  # Mesh must contain at least this many valid cells
+MIN_SNAPSHOTS = 10  # Minimum number of output snapshots required
+FINAL_TIME_TOLERANCE_S = 5.0  # Max allowed deviation from expected final time
+MIN_DEPTH_THRESHOLD_M = 0.05  # Minimum water depth threshold
+WET_CELL_THRESHOLD = 1e-6  # Threshold for counting a cell as wet
+MIN_WET_CELLS = 100  # Minimum number of wet cells required
+MIN_VOLUME_RATIO = 0.01  # Minimum acceptable volume ratio
+
 
 @dataclass(frozen=True)
 class RunFingerprint:
@@ -165,7 +174,7 @@ def _build_pipeline_like_phases(
 
     valid = workflow.geom.area > workflow.config.area_tol
     valid_indices = np.flatnonzero(valid)
-    if valid_indices.size < 2:
+    if valid_indices.size < MIN_VALID_CELLS:
         raise RuntimeError("Benchmark mesh must contain at least two valid cells")
     sorted_indices = valid_indices[np.argsort(workflow.geom.centroid[valid_indices, 0])]
     source_a = int(sorted_indices[sorted_indices.size // 3])
@@ -208,22 +217,22 @@ def _validate_run_invariants(
     expected_final_time_s: float,
 ) -> tuple[bool, str]:
     """Validate production-like correctness invariants for one run."""
-    if len(snapshots) < 10:
+    if len(snapshots) < MIN_SNAPSHOTS:
         return False, f"too_few_snapshots:{len(snapshots)}"
     if not np.all(np.diff(snap_times) >= 0.0):
         return False, "non_monotonic_snap_times"
-    if abs(snap_times[-1] - expected_final_time_s) > 5.0:
+    if abs(snap_times[-1] - expected_final_time_s) > FINAL_TIME_TOLERANCE_S:
         return False, f"unexpected_final_time:{snap_times[-1]:.3f}"
     max_depth = float(np.max(h_final))
-    if max_depth <= 0.05:
+    if max_depth <= MIN_DEPTH_THRESHOLD_M:
         return False, f"max_depth_too_small:{max_depth:.6f}"
-    wet_cells_final = int(np.count_nonzero(h_final > 1e-6))
-    if wet_cells_final < 100:
+    wet_cells_final = int(np.count_nonzero(h_final > WET_CELL_THRESHOLD))
+    if wet_cells_final < MIN_WET_CELLS:
         return False, f"too_few_wet_cells:{wet_cells_final}"
     if volume_injected <= 0.0:
         return False, f"invalid_volume_injected:{volume_injected:.3f}"
     vol_ratio = volume_final / volume_injected
-    if vol_ratio < 0.01:
+    if vol_ratio < MIN_VOLUME_RATIO:
         return False, f"volume_ratio_too_small:{vol_ratio:.6f}"
     if not np.isfinite(vol_ratio):
         return False, "volume_ratio_non_finite"
@@ -283,7 +292,7 @@ def _run_once(
         volume_final_bits=_float64_bits(result.volume_final_m3),
         volume_injected_bits=_float64_bits(result.volume_injected_m3),
         max_depth=float(np.max(h_final)),
-        wet_cells_final=int(np.count_nonzero(h_final > 1e-6)),
+        wet_cells_final=int(np.count_nonzero(h_final > WET_CELL_THRESHOLD)),
         wall_seconds=float(result.wall_seconds),
         invariant_ok=invariant_ok,
         invariant_reason=invariant_reason,

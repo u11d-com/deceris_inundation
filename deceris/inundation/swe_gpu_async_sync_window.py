@@ -19,11 +19,16 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+# Thresholds for CFL time step and simulation progression
+_CFL_MIN_DT = 1e-10  # Minimum CFL dt before raising error
+_TIME_EPSILON = 1e-12  # Epsilon for time/dt comparisons to avoid division by zero
+
+
 class SWESolverAsyncSyncWindow(SWESolver):
     """Async variant that submits many timesteps and synchronizes at output boundaries."""
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._WG
+        N, E, WG = self.N, self.E, self._work_group_size
         wg_e = (int(np.ceil(E / WG)), 1, 1)
         wg_c = (int(np.ceil(N / WG)), 1, 1)
         g, dt = self._g, self._dry_tol
@@ -70,7 +75,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build source kernel that reads dt from dt buffer."""
-        N, WG = self.N, self._WG
+        N, WG = self.N, self._work_group_size
         wg_c = (int(np.ceil(N / WG)), 1, 1)
         self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
@@ -172,7 +177,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 cfl_seq.eval()
                 dt = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
-                if dt < 1e-10:
+                if dt < _CFL_MIN_DT:
                     raise RuntimeError(f"CFL dt too small at step {step}: {dt:.3e}")
             else:
                 np.asarray(self.t_dtbuf.data())[0] = np.float32(dt)
@@ -212,7 +217,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
                 eta = (
                     (wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
-                    if t_sim > 1e-12
+                    if t_sim > _TIME_EPSILON
                     else float("inf")
                 )
                 eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"

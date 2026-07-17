@@ -94,6 +94,16 @@ class MeshGeometry:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Geometry numerical tolerances
+# ─────────────────────────────────────────────────────────────────────────────
+
+POLYGON_AREA_EPSILON = 1e-30  # Near-zero threshold for polygon area (degenerate cells)
+POLYGON_CENTROID_EPSILON = 1e-20  # Tolerance for cell centroid computation
+EDGE_LENGTH_EPSILON = 1e-30  # Near-zero threshold for edge length (degenerate edges)
+FACE_NDIM = 2  # Expected dimensionality of face array (flat or (N, degree))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Polygon geometry helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -107,7 +117,7 @@ def _shoelace_area(poly_verts: NDArray[np.float32]) -> float:
 
 def _polygon_centroid(poly_verts: NDArray[np.float32], signed_area: float) -> NDArray[np.float32]:
     """Centroid of a simple polygon. Falls back to vertex mean for degenerate cells."""
-    if abs(signed_area) < 1e-30:
+    if abs(signed_area) < POLYGON_AREA_EPSILON:
         # Degenerate (collinear) polygon — use arithmetic mean of vertices
         return poly_verts.mean(axis=0).astype(np.float32)
     x = poly_verts[:, 0].astype(np.float64)
@@ -165,7 +175,7 @@ def build_geometry(
             sys.stdout.flush()
 
     # ── Normalise input to flat + offsets format ──────────────────────────────
-    if faces.ndim == 2:
+    if faces.ndim == FACE_NDIM:
         shape0, shape1 = faces.shape
         n = int(shape0)
         d = int(shape1)
@@ -223,7 +233,7 @@ def build_geometry(
         cy = np.sum((y + y_next) * cross, axis=1) / (6.0 * signed_area)
 
         # Handle degenerate cells (zero area → use vertex mean)
-        degen = np.abs(signed_area) < 1e-20
+        degen = np.abs(signed_area) < POLYGON_CENTROID_EPSILON
         if degen.any():
             cx[degen] = poly_verts[degen, :, 0].mean(axis=1)
             cy[degen] = poly_verts[degen, :, 1].mean(axis=1)
@@ -295,7 +305,7 @@ def build_geometry(
         dy = pb[1] - pa[1]
         length = float(np.sqrt(dx * dx + dy * dy))
 
-        if length < 1e-30:
+        if length < EDGE_LENGTH_EPSILON:
             nx, ny = 0.0, 0.0
         else:
             nx = dy / length

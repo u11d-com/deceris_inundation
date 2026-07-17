@@ -25,9 +25,9 @@ class SWESolverGpuResidentBatch(SWESolver):
     _BATCH_STEPS = 10
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._WG
-        wg_e = (int(np.ceil(E / WG)), 1, 1)
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, E, work_group_size = self.N, self.E, self._work_group_size
+        wg_e = (int(np.ceil(E / work_group_size)), 1, 1)
+        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
         g, dt = self._g, self._dry_tol
 
         self._algo_flux_dtbuf = self._mgr.algorithm(
@@ -107,8 +107,8 @@ class SWESolverGpuResidentBatch(SWESolver):
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build source kernel that reads dt from dt buffer."""
-        N, WG = self.N, self._WG
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, work_group_size = self.N, self._work_group_size
+        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
         self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()

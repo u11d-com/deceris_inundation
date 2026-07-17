@@ -19,6 +19,12 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+# CFL time-stepping sentinels (imported from swe_gpu but cached locally for clarity)
+CFL_COLLAPSE_THRESHOLD = 1e-10  # Below this, CFL dt indicates collapse
+CFL_INVALID_SENTINEL = 1e10  # Sentinel value for uninitialized/invalid CFL
+DT_MIN_STEP = 1e-12  # Minimum time step threshold
+
+
 class SWESolverFixedDtBatch(SWESolver):
     """Batch fixed-dt RK steps to reduce submit/wait/fence overhead."""
 
@@ -84,9 +90,9 @@ class SWESolverFixedDtBatch(SWESolver):
             cfl_seq.record(kp.OpTensorSyncLocal([self.t_dtbuf]))
             cfl_seq.eval()
             dt_cfl = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
-            if dt_cfl < 1e-10:
+            if dt_cfl < CFL_COLLAPSE_THRESHOLD:
                 raise RuntimeError(f"CFL dt too small at step {step}: {dt_cfl:.3e}")
-            if dt_cfl < 1e10:
+            if dt_cfl < CFL_INVALID_SENTINEL:
                 dt = min(dt_cfl * cfl_safety, dt_max)
 
             batch_steps = max(1, int(cfl_interval))
@@ -100,7 +106,7 @@ class SWESolverFixedDtBatch(SWESolver):
             step_t = t_sim
             for _ in range(batch_steps):
                 step_dt = min(dt, t_end - step_t, next_output_time - step_t)
-                if step_dt <= 1e-12:
+                if step_dt <= DT_MIN_STEP:
                     break
                 step_dts.append(step_dt)
                 step_t += step_dt

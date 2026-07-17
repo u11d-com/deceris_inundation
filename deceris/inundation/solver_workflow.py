@@ -38,6 +38,13 @@ INITIAL_STATE_METADATA_KEYS = frozenset(
     {"saved_order", "mesh_source", "t_end_s", "dt_max", "cfl_interval"}
 )
 
+# Constants for validation and configuration
+MIN_NUM_GPUS_MULTI = 2  # Minimum GPUs required for multi-GPU solver
+MIN_NDIM_NPY_INPUT = 2  # Minimum array dimensions for .npy state input
+NPY_COLS_HUV = 3  # Number of columns for (h, hu, hv) state
+NPY_COLS_WITH_MANNING = 4  # Number of columns including Manning coefficient
+REQUIRED_CLI_ARGS = 2  # Number of CLI arguments (script + mesh_source)
+
 
 @dataclass(frozen=True)
 class PointSource:
@@ -189,7 +196,10 @@ def _load_initial_state(
                 state = {k: npz[k] for k in npz.files}
         elif suffix == ".npy":
             arr = np.load(path)
-            if arr.ndim != 2 or arr.shape[1] not in (3, 4):
+            if arr.ndim != MIN_NDIM_NPY_INPUT or arr.shape[1] not in (
+                NPY_COLS_HUV,
+                NPY_COLS_WITH_MANNING,
+            ):
                 raise ValueError(
                     "For .npy input, expected shape (N,3)=[h,hu,hv] or (N,4)=[h,hu,hv,n_mann]"
                 )
@@ -198,7 +208,7 @@ def _load_initial_state(
                 "hu": arr[:, 1],
                 "hv": arr[:, 2],
             }
-            if arr.shape[1] == 4:
+            if arr.shape[1] == NPY_COLS_WITH_MANNING:
                 state["n_mann"] = arr[:, 3]
         elif suffix in (".csv", ".parquet"):
             try:
@@ -611,7 +621,7 @@ if __name__ == "__main__":
     #   python solver_workflow.py ../../mesh/mesh_triangles_z2.shp
     import sys
 
-    if len(sys.argv) != 2:
+    if len(sys.argv) != REQUIRED_CLI_ARGS:
         raise SystemExit("Usage: python solver_workflow.py <mesh_source>")
 
     result = run_example(sys.argv[1])

@@ -19,13 +19,19 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+# CFL time-stepping sentinels (imported from swe_gpu but cached locally for clarity)
+CFL_COLLAPSE_THRESHOLD = 1e-10  # Below this, CFL dt indicates collapse
+CFL_INVALID_SENTINEL = 1e10  # Sentinel value for uninitialized/invalid CFL
+DT_MIN_STEP = 1e-12  # Minimum time step threshold
+
+
 class SWESolverDeviceCfl(SWESolver):
     """Device-side CFL resolve variant (host still drives timestep loop)."""
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E, WG = self.N, self.E, self._WG
-        wg_e = (int(np.ceil(E / WG)), 1, 1)
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, E, work_group_size = self.N, self.E, self._work_group_size
+        wg_e = (int(np.ceil(E / work_group_size)), 1, 1)
+        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
         g, dt = self._g, self._dry_tol
 
         self._algo_flux = self._mgr.algorithm(
@@ -70,8 +76,8 @@ class SWESolverDeviceCfl(SWESolver):
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
         """Build source kernel variant that reads dt from dt buffer."""
-        N, WG = self.N, self._WG
-        wg_c = (int(np.ceil(N / WG)), 1, 1)
+        N, work_group_size = self.N, self._work_group_size
+        wg_c = (int(np.ceil(N / work_group_size)), 1, 1)
         self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
         self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
         self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()
@@ -158,7 +164,7 @@ class SWESolverDeviceCfl(SWESolver):
                 cfl_seq.eval()
                 dt = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
-                if dt < 1e-10:
+                if dt < CFL_COLLAPSE_THRESHOLD:
                     if progress:
                         sys.stdout.write(
                             f"[solver][step {step}] CFL dt too small ({dt:.3e}), stopping\n"
@@ -206,7 +212,7 @@ class SWESolverDeviceCfl(SWESolver):
                     pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
                     eta = (
                         (wall_elapsed / t_sim) * max(t_end - t_sim, 0.0)
-                        if t_sim > 1e-12
+                        if t_sim > DT_MIN_STEP
                         else float("inf")
                     )
                     eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"

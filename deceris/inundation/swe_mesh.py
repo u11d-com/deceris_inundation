@@ -14,6 +14,9 @@ Usage
 import numpy as np
 from numpy.typing import NDArray
 
+# Mesh geometry constraints
+MIN_POLYGON_VERTICES = 3  # Minimum vertices for a valid polygon/face
+
 
 def load_mesh_file(
     path: str,
@@ -63,7 +66,7 @@ def load_mesh_file(
             if geom is None:
                 continue
             coords = list(geom.exterior.coords)[:-1]  # drop closing duplicate
-            if len(coords) < 3:
+            if len(coords) < MIN_POLYGON_VERTICES:
                 raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
             face_idx = []
             for xy in coords:
@@ -105,7 +108,7 @@ def load_mesh_file(
             if geom is None:
                 continue
             coords = list(geom.exterior.coords)[:-1]  # drop closing duplicate
-            if len(coords) < 3:
+            if len(coords) < MIN_POLYGON_VERTICES:
                 raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
             face_idx = []
             for xy in coords:
@@ -150,7 +153,7 @@ def load_mesh_file(
                     vert_list.append([float(parts[1]), float(parts[2])])
                 elif parts[0] == "f":
                     idx = [int(p.split("/")[0]) - 1 for p in parts[1:]]
-                    if len(idx) < 3:
+                    if len(idx) < MIN_POLYGON_VERTICES:
                         raise ValueError(f"OBJ face has {len(idx)} vertices — need at least 3.")
                     faces_list.append(idx)
 
