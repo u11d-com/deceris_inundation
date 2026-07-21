@@ -60,11 +60,7 @@ fingerprint + invariant/compare/deterministic/plot helpers in
 
 ## Documentation
 
-**Reading/searching `docs/`: use the `qmd` skill** — it's indexed for
-search and retrieval; don't grep/read the tree by hand. **After adding,
-moving, or renaming any doc: re-run the `qmd` skill's update/embed step**
-so the index stays current — this is a required step of any docs change,
-not optional cleanup.
+**Rule: never grep, glob, or read `docs/` directly — always use the `qmd` skill.** After adding/moving/renaming any doc, re-run `qmd`'s update/embed step (required, not optional).
 
 `docs/` tiers — each answers a different question:
 
