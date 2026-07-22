@@ -3,11 +3,11 @@
 Extracted from the api repo's ``test_inundation_initial_state.py``; the
 ``deceris.tools.inundation_tool`` cases stay in the api repo because they
 depend on API-side pipeline glue. Only the ``_load_initial_state`` white-box
-tests live here — they exercise ``deceris.inundation.solver_workflow``.
+tests live here — they exercise ``deceris.inundation.workflow``.
 """
 
 # pyright: reportPrivateUsage=false
-# Deliberate white-box test of solver_workflow._load_initial_state (private).
+# Deliberate white-box test of workflow._load_initial_state (private).
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import pytest
 def test_load_initial_state_ignores_saved_order_metadata() -> None:
     pytest.importorskip("hilbertcurve")
 
-    from deceris.inundation.solver_workflow import _load_initial_state
+    from deceris.inundation.workflow import _load_initial_state
 
     state: dict[str, object] = {
         "h": np.asarray([1.0, 0.0], dtype=np.float32),
@@ -49,7 +49,7 @@ def test_load_initial_state_ignores_benchmark_metadata_fields() -> None:
     """Benchmark metadata fields must be ignored rather than rejected."""
     pytest.importorskip("hilbertcurve")
 
-    from deceris.inundation.solver_workflow import _load_initial_state
+    from deceris.inundation.workflow import _load_initial_state
 
     state: dict[str, object] = {
         "h": np.asarray([1.0, 0.0], dtype=np.float32),

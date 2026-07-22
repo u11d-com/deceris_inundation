@@ -23,7 +23,7 @@ import numpy as np
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.typing import NDArray
 
-from .swe_tuning import (
+from ..tuning import (
     EDGE_LENGTH_EPSILON,
     FACE_NDIM,
     POLYGON_AREA_EPSILON,

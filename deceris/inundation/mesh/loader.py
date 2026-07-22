@@ -14,7 +14,7 @@ Usage
 import numpy as np
 from numpy.typing import NDArray
 
-from .swe_tuning import MIN_POLYGON_VERTICES
+from ..tuning import MIN_POLYGON_VERTICES
 
 
 def load_mesh_file(

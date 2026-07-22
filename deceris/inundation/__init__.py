@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .solver_workflow import (
+    from .workflow import (
         PointSource,
         SimulationPhase,
         SWEWorkflow,
@@ -26,7 +26,7 @@ _SOLVER_EXPORTS = frozenset(__all__)
 
 def __getattr__(name: str) -> object:
     if name in _SOLVER_EXPORTS:
-        from .solver_workflow import (  # pyright: ignore[reportMissingModuleSource]
+        from .workflow import (  # pyright: ignore[reportMissingModuleSource]
             PointSource,
             SimulationPhase,
             SWEWorkflow,

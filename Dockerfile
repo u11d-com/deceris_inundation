@@ -41,8 +41,8 @@ RUN curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR=/usr
 
 WORKDIR /opt/build
 COPY pyproject.toml uv.lock ./
-COPY deceris/inundation/build-kp-linux.sh ./
-COPY deceris/inundation/kp-patches ./kp-patches
+COPY deceris/inundation/scripts/build-kp-linux.sh ./
+COPY deceris/inundation/vulkan/patches ./patches
 
 RUN uv sync --frozen --python 3.12 --no-install-project --all-extras \
     && chmod +x build-kp-linux.sh \

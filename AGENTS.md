@@ -54,9 +54,9 @@ into the same persistent `dev` container.
 
 ## Shared modules
 
-Cross-module constants + helpers in `swe_tuning.py`. Benchmark
+Cross-module constants + helpers in `tuning.py`. Benchmark
 fingerprint + invariant/compare/deterministic/plot helpers in
-`benchmark_common.py`. **Import from these; do not redefine locally.**
+`bench/common.py`. **Import from these; do not redefine locally.**
 
 ## Documentation
 

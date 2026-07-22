@@ -15,28 +15,28 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
-from .swe_geometry import MeshGeometry, build_geometry, hilbert_reorder
-from .swe_geometry_cache import geometry_cache_key, load_geometry_cache, save_geometry_cache
-from .swe_mesh import load_mesh_file
-from .swe_shaders import SOURCE_GLSL, compile_all, compile_glsl
-from .swe_tuning import (
+from .mesh.cache import geometry_cache_key, load_geometry_cache, save_geometry_cache
+from .mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
+from .mesh.loader import load_mesh_file
+from .tuning import (
     MIN_NDIM_NPY_INPUT,
     NPY_COLS_HUV,
     NPY_COLS_WITH_MANNING,
     REQUIRED_CLI_ARGS,
 )
+from .vulkan.shaders import SOURCE_GLSL, compile_all, compile_glsl
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from numpy.typing import NDArray
 
-    from .swe_gpu_async_sync_window import SWESolverAsyncSyncWindow
-    from .swe_gpu_baseline import SWESolverBaseline
-    from .swe_gpu_batched_submit import SWESolverBatchedSubmit
-    from .swe_gpu_device_cfl import SWESolverDeviceCfl
-    from .swe_gpu_fixed_dt_batch import SWESolverFixedDtBatch
-    from .swe_gpu_gpu_resident_batch import SWESolverGpuResidentBatch
+    from .vulkan.async_sync_window import SWESolverAsyncSyncWindow
+    from .vulkan.baseline import SWESolverBaseline
+    from .vulkan.batched_submit import SWESolverBatchedSubmit
+    from .vulkan.device_cfl import SWESolverDeviceCfl
+    from .vulkan.fixed_dt_batch import SWESolverFixedDtBatch
+    from .vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
 
 # Metadata keys that ``_load_initial_state`` ignores rather than rejecting.
@@ -454,13 +454,13 @@ class SWEWorkflow:
             if n_loaded is not None:
                 n0 = n_loaded
 
-        from .swe_gpu_async_sync_window import SWESolverAsyncSyncWindow
-        from .swe_gpu_baseline import SWESolverBaseline
-        from .swe_gpu_batched_submit import SWESolverBatchedSubmit
-        from .swe_gpu_device_cfl import SWESolverDeviceCfl
-        from .swe_gpu_fixed_dt_batch import SWESolverFixedDtBatch
-        from .swe_gpu_fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
-        from .swe_gpu_gpu_resident_batch import SWESolverGpuResidentBatch
+        from .vulkan.async_sync_window import SWESolverAsyncSyncWindow
+        from .vulkan.baseline import SWESolverBaseline
+        from .vulkan.batched_submit import SWESolverBatchedSubmit
+        from .vulkan.device_cfl import SWESolverDeviceCfl
+        from .vulkan.fixed_dt_batch import SWESolverFixedDtBatch
+        from .vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
+        from .vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
 
         solver_cls_by_impl = {
             "baseline": SWESolverBaseline,
@@ -573,6 +573,7 @@ class SWEWorkflow:
 
 
 
+
 def build_example_phases() -> list[SimulationPhase]:
     """Return a ready-to-run phase schedule equivalent to the notebook sample."""
     return [
@@ -617,10 +618,10 @@ def run_example(mesh_source: str) -> WorkflowResult:
 
 if __name__ == "__main__":
     # Example CLI-style invocation:
-    #   python solver_workflow.py ../../mesh/mesh_triangles_z2.shp
+    #   python workflow.py ../../mesh/mesh_triangles_z2.shp
     import sys
 
     if len(sys.argv) != REQUIRED_CLI_ARGS:
-        raise SystemExit("Usage: python solver_workflow.py <mesh_source>")
+        raise SystemExit("Usage: python workflow.py <mesh_source>")
 
     result = run_example(sys.argv[1])

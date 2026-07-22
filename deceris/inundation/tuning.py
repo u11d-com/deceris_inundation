@@ -23,7 +23,7 @@ CFL_SANITY_MAX = 1e10
 SIMULATION_TIME_EPSILON = 1e-12
 
 
-# ── Workflow (solver_workflow.py) ─────────────────────────────────────────────
+# ── Workflow (workflow.py) ────────────────────────────────────────────────────
 MIN_NDIM_NPY_INPUT = 2
 NPY_COLS_HUV = 3
 NPY_COLS_WITH_MANNING = 4

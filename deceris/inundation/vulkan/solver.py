@@ -26,7 +26,7 @@ try:
 except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
-from .swe_tuning import (
+from ..tuning import (
     CFL_EPSILON_MIN,
     CFL_SANITY_MAX,
     SIMULATION_TIME_EPSILON,
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
     from numpy.typing import NDArray
 
-    from .swe_geometry import MeshGeometry
+    from ..mesh.geometry import MeshGeometry
 
 
 # ─────────────────────────────────────────────────────────────────────────────

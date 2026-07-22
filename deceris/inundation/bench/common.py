@@ -11,14 +11,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
-from .solver_workflow import (
-    PointSource,
-    SimulationPhase,
-    SWEWorkflow,
-    WorkflowResult,
-)
-from .swe_mesh import load_mesh_file
-from .swe_tuning import (
+from ..mesh.loader import load_mesh_file
+from ..tuning import (
     FINAL_TIME_TOLERANCE_S,
     MIN_DEPTH_THRESHOLD_M,
     MIN_REPEATS_FOR_DETERMINISM,
@@ -27,6 +21,12 @@ from .swe_tuning import (
     MIN_VOLUME_RATIO,
     MIN_WET_CELLS,
     WET_CELL_THRESHOLD,
+)
+from ..workflow import (
+    PointSource,
+    SimulationPhase,
+    SWEWorkflow,
+    WorkflowResult,
 )
 
 if TYPE_CHECKING:
@@ -185,7 +185,7 @@ def save_depth_png(
     faces_flat = workflow.faces_flat
     face_offsets = workflow.face_offsets
     if verts is None or faces_flat is None or face_offsets is None:
-        # Geometry-cache hit path (solver_workflow.py's prepare()) skips
+        # Geometry-cache hit path (workflow.py's prepare()) skips
         # load_mesh_file entirely, so verts/faces_flat/face_offsets are never
         # populated on the workflow — the cached .npz only stores geom+perm,
         # not raw mesh vertices. Re-read the mesh file just for plotting.

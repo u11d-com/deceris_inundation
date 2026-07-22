@@ -17,7 +17,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCHES_DIR="${PATCHES_DIR:-${SCRIPT_DIR}/kp-patches}"
+PATCHES_DIR="${PATCHES_DIR:-${SCRIPT_DIR}/patches}"
 DEFAULT_VENV="/opt/build/.venv"
 VENV="${1:-${DEFAULT_VENV}}"
 PYTHON="${VENV}/bin/python"

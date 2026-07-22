@@ -1,4 +1,4 @@
-"""Option #3 SWE solver: async in-flight stepping with coarse host synchronization."""
+"""Option #5 SWE solver: barriered GPU-resident adaptive timestep batches."""
 # pyright: reportMissingImports=false,reportPrivateUsage=false,reportUnknownArgumentType=false,reportUnknownMemberType=false,reportUnknownVariableType=false,reportUnusedExpression=false
 
 from __future__ import annotations
@@ -11,22 +11,19 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .swe_gpu import SWESolver, _pc_cfl_accum, _pc_cfl_reduce
+from ..tuning import compute_workgroups
+from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from numpy.typing import NDArray
 
-from .swe_tuning import (
-    CFL_EPSILON_MIN,
-    compute_eta_seconds,
-    compute_workgroups,
-)
 
+class SWESolverGpuResidentBatch(SWESolver):
+    """Keep CFL resolve and time advance on GPU with explicit compute barriers."""
 
-class SWESolverAsyncSyncWindow(SWESolver):
-    """Async variant that submits many timesteps and synchronizes at output boundaries."""
+    _BATCH_STEPS = 10
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
         N, E = self.N, self.E
@@ -61,13 +58,48 @@ class SWESolverAsyncSyncWindow(SWESolver):
             spec_consts=[],
             push_consts=_pc_cfl_reduce(N, g, dt, self._cfl),
         )
-        self._algo_cfl_resolve = self._mgr.algorithm(
+        self._algo_dt_reset = self._mgr.algorithm(
             self._all_tensors,
-            spv["cfl_resolve"],
+            spv["dt_reset"],
             workgroup=(1, 1, 1),
             spec_consts=[],
-            push_consts=[0.0, 0.0, 0.8, 0.0, 0.0],
+            push_consts=[self._SENTINEL_F, 0.0, 0.0, 0.0],
         )
+
+        self.t_timebuf = self._mgr.tensor(np.array([0.0], dtype=np.float32))
+        self._time_tensors = [*self._all_tensors, self.t_timebuf]
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_timebuf])).eval()
+        self._algo_cfl_resolve_time = self._mgr.algorithm(
+            self._time_tensors,
+            spv["cfl_resolve_time"],
+            workgroup=(1, 1, 1),
+            spec_consts=[],
+            push_consts=[0.0, 0.0, 0.8, 0.0],
+        )
+        self._algo_time_advance = self._mgr.algorithm(
+            self._time_tensors,
+            spv["time_advance"],
+            workgroup=(1, 1, 1),
+            spec_consts=[],
+            push_consts=[],
+        )
+        self._barrier_dt = kp.OpComputeBarrier([self.t_dtbuf])
+        self._barrier_cfl = kp.OpComputeBarrier([self.t_cfl_scratch, self.t_dtbuf])
+        self._barrier_flux = kp.OpComputeBarrier([self.t_dh, self.t_dhu, self.t_dhv])
+        self._barrier_state = kp.OpComputeBarrier(
+            [
+                self.t_h,
+                self.t_hu,
+                self.t_hv,
+                self.t_h1,
+                self.t_hu1,
+                self.t_hv1,
+                self.t_dh,
+                self.t_dhu,
+                self.t_dhv,
+            ]
+        )
+        self._barrier_time = kp.OpComputeBarrier([self.t_timebuf])
 
         self._algo_source = None
         if "source_dtbuf" in spv:
@@ -88,6 +120,10 @@ class SWESolverAsyncSyncWindow(SWESolver):
             push_consts=[float(N), 0.0],
         )
 
+    def _upload_time(self, value: float) -> None:
+        np.asarray(self.t_timebuf.data())[0] = np.float32(value)
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_timebuf])).eval()
+
     def run(
         self,
         t_end: float,
@@ -101,7 +137,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
         resume: bool = False,
         t_start: float = 0.0,
     ) -> tuple[list[NDArray[np.float32]], list[float]]:
-        """Run simulation with async sequences and coarse synchronization cadence."""
+        """Run simulation in barriered GPU-side timestep batches."""
         if source_fn is not None:
             return super().run(
                 t_end=t_end,
@@ -138,6 +174,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
                 use_gpu_source = True
 
         t_offset = t_start if resume else 0.0
+        self._upload_time(t_offset)
         if resume:
             snapshots: list[NDArray[np.float32]] = [self.download_h().copy()]
             snap_times: list[float] = [t_start]
@@ -147,84 +184,100 @@ class SWESolverAsyncSyncWindow(SWESolver):
 
         t_sim = t_offset
         step = 0
-        dt = dt_init
         next_output_time = t_offset + output_interval_s
         wall_start = _time.monotonic()
         last_log_wall = wall_start
         log_interval = 10.0
+        dry_dt = min(dt_init, dt_max)
+        eps = 1e-7
 
         while t_sim < t_end:
-            dt_cap = min(t_end - t_sim, dt_max)
-            dt = min(dt, dt_cap)
+            batch_stop = min(t_end, next_output_time)
+            seq = self._mgr.sequence()
+            seq.record(kp.OpAlgoDispatch(self._algo_dt_reset, [self._SENTINEL_F, 0.0, 0.0, 0.0]))
+            seq.record(self._barrier_dt)
+            seq.record(kp.OpAlgoDispatch(self._algo_cfl_accum, _pc_cfl_accum(E, g, dry_tol, cfl)))
+            seq.record(self._barrier_cfl)
+            seq.record(kp.OpAlgoDispatch(self._algo_cfl_reduce, _pc_cfl_reduce(N, g, dry_tol, cfl)))
+            seq.record(self._barrier_cfl)
+            seq.record(
+                kp.OpAlgoDispatch(
+                    self._algo_cfl_resolve_time,
+                    [float(dt_max), float(batch_stop), float(cfl_safety), float(dry_dt)],
+                )
+            )
+            seq.record(self._barrier_dt)
 
-            if step % cfl_interval == 0:
-                np.asarray(self.t_dtbuf.data())[0] = self._SENTINEL_F
-                cfl_seq = self._mgr.sequence()
-                cfl_seq.record(kp.OpTensorSyncDevice([self.t_dtbuf]))
-                cfl_seq.record(
-                    kp.OpAlgoDispatch(self._algo_cfl_accum, _pc_cfl_accum(E, g, dry_tol, cfl))
-                )
-                cfl_seq.record(
-                    kp.OpAlgoDispatch(self._algo_cfl_reduce, _pc_cfl_reduce(N, g, dry_tol, cfl))
-                )
-                cfl_seq.record(
+            for _ in range(max(1, int(cfl_interval), self._BATCH_STEPS)):
+                seq.record(
                     kp.OpAlgoDispatch(
-                        self._algo_cfl_resolve,
-                        [float(dt), float(dt_cap), float(cfl_safety), 0.0, 0.0],
+                        self._algo_flux_dtbuf,
+                        [float(E), 0.0, g, dry_tol, cfl, 0.0],
                     )
                 )
-                cfl_seq.record(kp.OpTensorSyncLocal([self.t_dtbuf]))
-                cfl_seq.eval()
-                dt = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
-
-                if dt < CFL_EPSILON_MIN:
-                    raise RuntimeError(f"CFL dt too small at step {step}: {dt:.3e}")
-            else:
-                np.asarray(self.t_dtbuf.data())[0] = np.float32(dt)
-                self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_dtbuf])).eval()
-
-            dt = min(dt, t_end - t_sim)
-
-            step_seq = self._mgr.sequence()
-            step_seq.record(
-                kp.OpAlgoDispatch(self._algo_flux_dtbuf, [float(E), 0.0, g, dry_tol, cfl, 0.0])
-            )
-            step_seq.record(
-                kp.OpAlgoDispatch(
-                    self._algo_update_dtbuf,
-                    [float(N), 0.0, g, dry_tol, cfl, 0.0],
+                seq.record(self._barrier_flux)
+                seq.record(
+                    kp.OpAlgoDispatch(
+                        self._algo_update_dtbuf,
+                        [float(N), 0.0, g, dry_tol, cfl, 0.0],
+                    )
                 )
-            )
-            step_seq.record(
-                kp.OpAlgoDispatch(self._algo_flux_dtbuf, [float(E), 0.0, g, dry_tol, cfl, 1.0])
-            )
-            step_seq.record(
-                kp.OpAlgoDispatch(
-                    self._algo_update_dtbuf,
-                    [float(N), 0.0, g, dry_tol, cfl, 1.0],
+                seq.record(self._barrier_state)
+                seq.record(
+                    kp.OpAlgoDispatch(
+                        self._algo_flux_dtbuf,
+                        [float(E), 0.0, g, dry_tol, cfl, 1.0],
+                    )
                 )
-            )
-            if use_gpu_source:
-                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
-            step_seq.eval()
+                seq.record(self._barrier_flux)
+                seq.record(
+                    kp.OpAlgoDispatch(
+                        self._algo_update_dtbuf,
+                        [float(N), 0.0, g, dry_tol, cfl, 1.0],
+                    )
+                )
+                seq.record(self._barrier_state)
+                if use_gpu_source:
+                    seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
+                    seq.record(self._barrier_state)
+                seq.record(kp.OpAlgoDispatch(self._algo_time_advance))
+                seq.record(self._barrier_time)
+                seq.record(
+                    kp.OpAlgoDispatch(
+                        self._algo_cfl_resolve_time,
+                        [float(dt_max), float(batch_stop), 1.0, float(dry_dt)],
+                    )
+                )
+                seq.record(self._barrier_dt)
+            seq.record(kp.OpTensorSyncLocal([self.t_timebuf]))
+            seq.eval()
 
-            t_sim += dt
-            step += 1
+            t_prev = t_sim
+            t_sim = float(np.array(self.t_timebuf.data(), dtype=np.float32)[0])
+            if abs(t_sim - batch_stop) <= eps:
+                t_sim = batch_stop
+            if t_sim <= t_prev + eps:
+                raise RuntimeError(f"GPU batch made no time progress at step {step}: t={t_sim:.6f}")
+            step += self._BATCH_STEPS
 
             now = _time.monotonic()
             if progress and now - last_log_wall >= log_interval:
                 wall_elapsed = now - wall_start
                 pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
-                eta = compute_eta_seconds(wall_elapsed, t_sim, 0.0, t_end)
+                eta = (
+                    (wall_elapsed / max(t_sim - t_offset, eps)) * max(t_end - t_sim, 0.0)
+                    if t_sim > t_offset
+                    else float("inf")
+                )
                 eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"
                 sys.stdout.write(
-                    f"[solver][step {step}] sim={t_sim:.2f}/{t_end:.2f}s "
-                    f"({pct:.1f}%) dt={dt:.4f} eta~{eta_str}\n"
+                    f"[solver][gpu-batch {step}] sim={t_sim:.2f}/{t_end:.2f}s "
+                    f"({pct:.1f}%) eta~{eta_str}\n"
                 )
                 sys.stdout.flush()
                 last_log_wall = now
 
-            if t_sim >= next_output_time:
+            if t_sim + eps >= next_output_time:
                 h_snap = self.download_h()
                 if not np.isfinite(h_snap).all():
                     snapshots.append(np.nan_to_num(h_snap, nan=0.0, posinf=0.0).copy())
@@ -250,4 +303,4 @@ class SWESolverAsyncSyncWindow(SWESolver):
         return snapshots, snap_times
 
 
-__all__ = ["SWESolverAsyncSyncWindow"]
+__all__ = ["SWESolverGpuResidentBatch"]

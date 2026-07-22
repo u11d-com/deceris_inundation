@@ -10,13 +10,12 @@ Run ``python swe_geometry_cache.py`` for the standalone self-check.
 from __future__ import annotations
 
 import hashlib
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from .swe_geometry import MeshGeometry
+from .geometry import MeshGeometry
 
 if TYPE_CHECKING:
     import os
@@ -131,7 +130,7 @@ def _self_check() -> None:
     """Build a tiny synthetic quad mesh, cache it, reload it, and diff arrays."""
     import tempfile
 
-    from .swe_geometry import build_geometry, hilbert_reorder
+    from .geometry import build_geometry, hilbert_reorder
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
@@ -178,8 +177,7 @@ def _self_check() -> None:
         if load_geometry_cache(cache_dir, "wrong-key") is not None:
             raise AssertionError("cache lookup with a mismatched key unexpectedly hit")
 
-        sys.stdout.write("swe_geometry_cache self-check: OK\n")
-
+        sys.stdout.write("geometry cache self-check: OK\n")
 
 if __name__ == "__main__":
     _self_check()

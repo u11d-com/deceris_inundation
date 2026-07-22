@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 
-from .swe_shaders_cfl import (
+from .cfl import (
     CFL_ACCUM_GLSL,
     CFL_REDUCE_GLSL,
     CFL_RESOLVE_GLSL,
@@ -15,9 +15,9 @@ from .swe_shaders_cfl import (
     DT_RESET_GLSL,
     TIME_ADVANCE_GLSL,
 )
-from .swe_shaders_flux import FLUX_DTBUF_GLSL, FLUX_GLSL
-from .swe_shaders_source import SOURCE_DTBUF_GLSL, SOURCE_GLSL
-from .swe_shaders_update import UPDATE_DTBUF_GLSL, UPDATE_GLSL
+from .flux import FLUX_DTBUF_GLSL, FLUX_GLSL
+from .source import SOURCE_DTBUF_GLSL, SOURCE_GLSL
+from .update import UPDATE_DTBUF_GLSL, UPDATE_GLSL
 
 
 def compile_glsl(glsl_src: str, label: str) -> bytes:

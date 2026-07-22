@@ -12,7 +12,7 @@ from typing import Literal
 
 import numpy as np
 
-from deceris.inundation.benchmark_common import (
+from deceris.inundation.bench.common import (
     RunFingerprint,
     all_invariants_ok,
     assert_deterministic,
@@ -21,10 +21,10 @@ from deceris.inundation.benchmark_common import (
     compare_fingerprints_exact,
     save_depth_png,
 )
-from deceris.inundation.benchmark_common import (
+from deceris.inundation.bench.common import (
     median_wall as _median_wall,
 )
-from deceris.inundation.solver_workflow import (
+from deceris.inundation.workflow import (
     SWEWorkflow,
     WorkflowConfig,
 )

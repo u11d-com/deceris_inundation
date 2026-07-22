@@ -1,9 +1,8 @@
-"""Option #1 SWE solver: GPU-side CFL resolve + dt-buffer update/source kernels."""
+"""Candidate SWE solver with batched command-buffer submission."""
 # pyright: reportMissingImports=false,reportPrivateUsage=false,reportUnknownArgumentType=false,reportUnknownMemberType=false,reportUnknownVariableType=false,reportUnusedExpression=false
 
 from __future__ import annotations
 
-import math
 import sys
 import time as _time
 from typing import TYPE_CHECKING
@@ -11,82 +10,22 @@ from typing import TYPE_CHECKING
 import kp
 import numpy as np
 
-from .swe_gpu import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
+from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_flux, _pc_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from numpy.typing import NDArray
 
-from .swe_tuning import (
+from ..tuning import (
     CFL_EPSILON_MIN,
+    CFL_SANITY_MAX,
     compute_eta_seconds,
-    compute_workgroups,
 )
 
 
-class SWESolverDeviceCfl(SWESolver):
-    """Device-side CFL resolve variant (host still drives timestep loop)."""
-
-    def _build_algorithms(self, spv: dict[str, bytes]) -> None:
-        N, E = self.N, self.E
-        wg_e, wg_c = compute_workgroups(N, E, self._work_group_size)
-        g, dt = self._g, self._dry_tol
-
-        self._algo_flux = self._mgr.algorithm(
-            self._all_tensors,
-            spv["flux"],
-            workgroup=wg_e,
-            spec_consts=[],
-            push_consts=_pc_flux(E, 0.0, g, dt, self._cfl, 0),
-        )
-        self._algo_update_dtbuf = self._mgr.algorithm(
-            self._all_tensors,
-            spv["update_dtbuf"],
-            workgroup=wg_c,
-            spec_consts=[],
-            push_consts=_pc_update(N, 0.0, 0, g, dt, self._cfl),
-        )
-        self._algo_cfl_accum = self._mgr.algorithm(
-            self._all_tensors,
-            spv["cfl_accum"],
-            workgroup=wg_e,
-            spec_consts=[],
-            push_consts=_pc_cfl_accum(E, g, dt, self._cfl),
-        )
-        self._algo_cfl_reduce = self._mgr.algorithm(
-            self._all_tensors,
-            spv["cfl_reduce"],
-            workgroup=wg_c,
-            spec_consts=[],
-            push_consts=_pc_cfl_reduce(N, g, dt, self._cfl),
-        )
-        self._algo_cfl_resolve = self._mgr.algorithm(
-            self._all_tensors,
-            spv["cfl_resolve"],
-            workgroup=(1, 1, 1),
-            spec_consts=[],
-            push_consts=[0.0, 0.0, 0.8, 0.0, 0.0],
-        )
-
-        self._algo_source = None
-        if "source_dtbuf" in spv:
-            self._source_dtbuf_spv = spv["source_dtbuf"]
-
-    def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
-        """Build source kernel variant that reads dt from dt buffer."""
-        N = self.N
-        _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
-        self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
-        self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()
-        self._algo_source = self._mgr.algorithm(
-            self._source_tensors,
-            self._source_dtbuf_spv,
-            workgroup=wg_c,
-            spec_consts=[],
-            push_consts=[float(N), 0.0],
-        )
+class SWESolverBatchedSubmit(SWESolver):
+    """SWE solver variant that batches Vulkan work submissions per timestep."""
 
     def run(
         self,
@@ -101,7 +40,7 @@ class SWESolverDeviceCfl(SWESolver):
         resume: bool = False,
         t_start: float = 0.0,
     ) -> tuple[list[NDArray[np.float32]], list[float]]:
-        """Run Heun RK2 simulation with GPU-side CFL resolve kernel."""
+        """Run Heun RK2 simulation with batched GPU sequence evaluation."""
         N, E = self.N, self.E
         g, dt_ = self._g, self._dry_tol
         cfl = self._cfl
@@ -110,15 +49,16 @@ class SWESolverDeviceCfl(SWESolver):
             self.reset(self._h0, np.zeros(N, np.float32), np.zeros(N, np.float32))
 
         inv_area = (1.0 / self._area).astype(np.float32)
+
         use_gpu_source = False
         src_dh_per_sec: NDArray[np.float32] | None = None
 
         if source_rate is not None and source_fn is None:
             src_dh_per_sec = np.asarray(source_rate, dtype=np.float32) * inv_area
-            if self._algo_source is None and hasattr(self, "_source_dtbuf_spv"):
+            if self._algo_source is None and hasattr(self, "_source_spv"):
                 self._build_source_algo(src_dh_per_sec)
-            elif self._algo_source is not None and hasattr(self, "t_source_dtbuf"):
-                self._upload(self.t_source_dtbuf, src_dh_per_sec)
+            elif self._algo_source is not None and hasattr(self, "t_source"):
+                self._upload(self.t_source, src_dh_per_sec)
             if self._algo_source is not None:
                 use_gpu_source = True
 
@@ -129,7 +69,6 @@ class SWESolverDeviceCfl(SWESolver):
         else:
             snapshots = [self._h0.copy()]
             snap_times = [0.0]
-
         t_sim = t_offset
         step = 0
         dt = dt_init
@@ -140,8 +79,7 @@ class SWESolverDeviceCfl(SWESolver):
         cfl_safety = 0.8
 
         while t_sim < t_end:
-            dt_cap = min(t_end - t_sim, dt_max)
-            dt = min(dt, dt_cap)
+            dt = min(dt, t_end - t_sim, dt_max)
 
             if step % cfl_interval == 0:
                 np.asarray(self.t_dtbuf.data())[0] = self._SENTINEL_F
@@ -153,37 +91,31 @@ class SWESolverDeviceCfl(SWESolver):
                 cfl_seq.record(
                     kp.OpAlgoDispatch(self._algo_cfl_reduce, _pc_cfl_reduce(N, g, dt_, cfl))
                 )
-                cfl_seq.record(
-                    kp.OpAlgoDispatch(
-                        self._algo_cfl_resolve,
-                        [float(dt), float(dt_cap), float(cfl_safety), 0.0, 0.0],
-                    )
-                )
                 cfl_seq.record(kp.OpTensorSyncLocal([self.t_dtbuf]))
                 cfl_seq.eval()
-                dt = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
+                dt_cfl = float(np.array(self.t_dtbuf.data(), dtype=np.float32)[0])
 
-                if dt < CFL_EPSILON_MIN:
+                if dt_cfl < CFL_EPSILON_MIN:
                     if progress:
                         sys.stdout.write(
-                            f"[solver][step {step}] CFL dt too small ({dt:.3e}), stopping\n"
+                            f"[solver][step {step}] CFL dt too small ({dt_cfl:.3e}), stopping\n"
                         )
                         sys.stdout.flush()
                     break
-
+                if dt_cfl < CFL_SANITY_MAX:
+                    dt = min(dt_cfl * cfl_safety, dt_max)
             dt = min(dt, t_end - t_sim)
 
             step_seq = self._mgr.sequence()
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 0)))
-            step_seq.record(
-                kp.OpAlgoDispatch(self._algo_update_dtbuf, _pc_update(N, dt, 0, g, dt_, cfl))
-            )
+            step_seq.record(kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl)))
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 1)))
-            step_seq.record(
-                kp.OpAlgoDispatch(self._algo_update_dtbuf, _pc_update(N, dt, 1, g, dt_, cfl))
-            )
+            step_seq.record(kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl)))
+
             if use_gpu_source:
-                step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))
+                step_seq.record(
+                    kp.OpAlgoDispatch(self._require_algo_source(), [float(N), float(dt)])
+                )
             step_seq.eval()
 
             if not use_gpu_source:
@@ -210,7 +142,7 @@ class SWESolverDeviceCfl(SWESolver):
                     wall_elapsed = now - wall_start
                     pct = t_sim / t_end * 100.0 if t_end > 0 else 0.0
                     eta = compute_eta_seconds(wall_elapsed, t_sim, 0.0, t_end)
-                    eta_str = f"{eta:.1f}s" if math.isfinite(eta) else "inf"
+                    eta_str = f"{eta:.1f}s" if np.isfinite(eta) else "inf"
                     sys.stdout.write(
                         f"[solver][step {step}] sim={t_sim:.2f}/{t_end:.2f}s "
                         f"({pct:.1f}%) dt={dt:.4f} eta~{eta_str}\n"
@@ -244,4 +176,4 @@ class SWESolverDeviceCfl(SWESolver):
         return snapshots, snap_times
 
 
-__all__ = ["SWESolverDeviceCfl"]
+__all__ = ["SWESolverBatchedSubmit"]

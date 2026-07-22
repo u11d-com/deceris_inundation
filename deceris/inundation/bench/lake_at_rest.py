@@ -10,18 +10,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from deceris.inundation.solver_workflow import (
+from deceris.inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
+from deceris.inundation.vulkan.fixed_dt_batch import SWESolverFixedDtBatch
+from deceris.inundation.vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
+from deceris.inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
+from deceris.inundation.workflow import (
     _compile_solver_shaders,  # pyright: ignore[reportPrivateUsage]
 )
-from deceris.inundation.swe_geometry import MeshGeometry, build_geometry, hilbert_reorder
-from deceris.inundation.swe_gpu_fixed_dt_batch import SWESolverFixedDtBatch
-from deceris.inundation.swe_gpu_fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
-from deceris.inundation.swe_gpu_gpu_resident_batch import SWESolverGpuResidentBatch
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from deceris.inundation.swe_gpu import SWESolver
+    from deceris.inundation.vulkan.solver import SWESolver
 
 NX = NY = 128
 G = 9.81
