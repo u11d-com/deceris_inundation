@@ -27,8 +27,11 @@ except ImportError as exc:
     raise ImportError("kompute (kp) is required.  Install with:  pip install kp") from exc
 
 from ..tuning import (
+    CFL_DEFAULT,
     CFL_EPSILON_MIN,
     CFL_SANITY_MAX,
+    DRY_TOL_DEFAULT,
+    GRAVITY_G,
     SIMULATION_TIME_EPSILON,
     compute_workgroups,
 )
@@ -101,9 +104,9 @@ class SWESolver:
         hv0: NDArray[np.float32],
         n0: NDArray[np.float32],
         *,
-        g: float = 9.81,
-        dry_tol: float = 1e-4,
-        cfl: float = 0.45,
+        g: float = GRAVITY_G,
+        dry_tol: float = DRY_TOL_DEFAULT,
+        cfl: float = CFL_DEFAULT,
         workgroup_size: int = 256,
     ) -> None:
         self.geom = geom
@@ -224,6 +227,26 @@ class SWESolver:
             spec_consts=[],
             push_consts=_pc_update(N, 0.0, 0, g, dt, self._cfl),
         )
+        self._build_cfl_algos(spv, N, E, wg_e, wg_c, g, dt)
+        self._wg_e = wg_e
+        self._wg_c = wg_c
+
+        # Source kernel (optional — only built if SPV provided)
+        self._algo_source = None
+        if "source" in spv:
+            self._source_spv = spv["source"]
+
+    def _build_cfl_algos(
+        self,
+        spv: dict[str, bytes],
+        N: int,
+        E: int,
+        wg_e: tuple[int, int, int],
+        wg_c: tuple[int, int, int],
+        g: float,
+        dt: float,
+    ) -> None:
+        """Build the CFL accumulation + reduction algorithms (shared by all variants)."""
         self._algo_cfl_accum = self._mgr.algorithm(
             self._all_tensors,
             spv["cfl_accum"],
@@ -238,24 +261,34 @@ class SWESolver:
             spec_consts=[],
             push_consts=_pc_cfl_reduce(N, g, dt, self._cfl),
         )
-        self._wg_e = wg_e
-        self._wg_c = wg_c
-
-        # Source kernel (optional — only built if "source" SPV provided)
-        self._algo_source = None
-        if "source" in spv:
-            self._source_spv = spv["source"]
 
     def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
-        """Build the GPU source kernel using a separate tensor list."""
+        """Build the GPU source kernel.
+
+        Handles both the base pattern (``_source_spv``, ``[t_h, t_source]``) and
+        the dtbuf subclass pattern (``_source_dtbuf_spv``,
+        ``[*_all_tensors, t_source_dtbuf]``) — subclasses that set
+        ``_source_dtbuf_spv`` in ``_build_algorithms`` get the dtbuf variant
+        automatically.
+        """
         N = self.N
         _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
-        self.t_source = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
-        self._source_tensors = [self.t_h, self.t_source]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source])).eval()
+        has_dt = hasattr(self, "_source_dtbuf_spv")
+        source_spv = getattr(self, "_source_dtbuf_spv" if has_dt else "_source_spv", None)
+        if source_spv is None:
+            msg = "No source SPV found — set _source_spv or _source_dtbuf_spv in _build_algorithms"
+            raise RuntimeError(msg)
+        source_tensor = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
+        if has_dt:
+            self.t_source_dtbuf = source_tensor
+            self._source_tensors = [*self._all_tensors, source_tensor]
+        else:
+            self.t_source = source_tensor
+            self._source_tensors = [self.t_h, source_tensor]
+        self._mgr.sequence().record(kp.OpTensorSyncDevice([source_tensor])).eval()
         self._algo_source = self._mgr.algorithm(
             self._source_tensors,
-            self._source_spv,
+            source_spv,
             workgroup=wg_c,
             spec_consts=[],
             push_consts=[float(N), 0.0],

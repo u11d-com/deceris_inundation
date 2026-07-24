@@ -19,6 +19,9 @@ from .mesh.cache import geometry_cache_key, load_geometry_cache, save_geometry_c
 from .mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 from .mesh.loader import load_mesh_file
 from .tuning import (
+    CFL_DEFAULT,
+    DRY_TOL_DEFAULT,
+    GRAVITY_G,
     MIN_NDIM_NPY_INPUT,
     NPY_COLS_HUV,
     NPY_COLS_WITH_MANNING,
@@ -76,9 +79,9 @@ class WorkflowConfig:
     output_interval_s: float
     dt_max: float
     cfl_interval: int
-    gravity: float = 9.81
-    dry_tol: float = 1e-4
-    cfl: float = 0.45
+    gravity: float = GRAVITY_G
+    dry_tol: float = DRY_TOL_DEFAULT
+    cfl: float = CFL_DEFAULT
     workgroup_size: int = 256
     dt_init: float = 1e-2
     use_hilbert_reorder: bool = True

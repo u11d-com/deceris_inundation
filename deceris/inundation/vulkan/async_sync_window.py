@@ -47,20 +47,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
             spec_consts=[],
             push_consts=[float(N), 0.0, g, dt, self._cfl, 0.0],
         )
-        self._algo_cfl_accum = self._mgr.algorithm(
-            self._all_tensors,
-            spv["cfl_accum"],
-            workgroup=wg_e,
-            spec_consts=[],
-            push_consts=_pc_cfl_accum(E, g, dt, self._cfl),
-        )
-        self._algo_cfl_reduce = self._mgr.algorithm(
-            self._all_tensors,
-            spv["cfl_reduce"],
-            workgroup=wg_c,
-            spec_consts=[],
-            push_consts=_pc_cfl_reduce(N, g, dt, self._cfl),
-        )
+        self._build_cfl_algos(spv, N, E, wg_e, wg_c, g, dt)
         self._algo_cfl_resolve = self._mgr.algorithm(
             self._all_tensors,
             spv["cfl_resolve"],
@@ -72,21 +59,6 @@ class SWESolverAsyncSyncWindow(SWESolver):
         self._algo_source = None
         if "source_dtbuf" in spv:
             self._source_dtbuf_spv = spv["source_dtbuf"]
-
-    def _build_source_algo(self, src_dh_per_sec: NDArray[np.float32]) -> None:
-        """Build source kernel that reads dt from dt buffer."""
-        N = self.N
-        _, wg_c = compute_workgroups(N, self.E, self._work_group_size)
-        self.t_source_dtbuf = self._mgr.tensor(self._as_f32_1d(src_dh_per_sec))
-        self._source_tensors = [*self._all_tensors, self.t_source_dtbuf]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice([self.t_source_dtbuf])).eval()
-        self._algo_source = self._mgr.algorithm(
-            self._source_tensors,
-            self._source_dtbuf_spv,
-            workgroup=wg_c,
-            spec_consts=[],
-            push_consts=[float(N), 0.0],
-        )
 
     def run(
         self,

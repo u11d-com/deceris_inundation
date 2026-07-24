@@ -17,6 +17,12 @@ FACE_NDIM = 2
 # ── Mesh (swe_mesh.py) ────────────────────────────────────────────────────────
 MIN_POLYGON_VERTICES = 3
 
+# ── Physical + numerical defaults (swe_gpu.py / workflow) ─────────────────────
+GRAVITY_G = 9.81
+DRY_TOL_DEFAULT = 1e-4
+CFL_DEFAULT = 0.45
+REGIME_DRY = 2
+
 # ── Vulkan solver (swe_gpu.py) ────────────────────────────────────────────────
 CFL_EPSILON_MIN = 1e-10
 CFL_SANITY_MAX = 1e10

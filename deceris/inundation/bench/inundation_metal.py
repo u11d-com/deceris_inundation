@@ -235,23 +235,36 @@ def main() -> int:
     if args.cfl_interval < 1:
         raise ValueError("--cfl-interval must be >= 1")
 
-    repo_root = Path(__file__).resolve().parents[4]
-    mesh_path = Path(args.mesh)
-    if not mesh_path.is_absolute():
-        mesh_path = repo_root / mesh_path
+    # Path resolution uses the current working directory first, then script dir.
+    # Does NOT assume a fixed monorepo directory depth (no parents[N]).
+    script_dir = Path(__file__).resolve().parent
+
+    def _resolve_path(raw: str) -> Path:
+        p = Path(raw)
+        if p.is_absolute():
+            return p
+        cwd_candidate = Path.cwd() / p
+        if cwd_candidate.exists():
+            return cwd_candidate
+        script_candidate = script_dir / p
+        if script_candidate.exists():
+            return script_candidate
+        return cwd_candidate
+
+    mesh_path = _resolve_path(args.mesh)
     if not mesh_path.exists():
         raise FileNotFoundError(f"Mesh not found: {mesh_path}")
 
     output_root = Path(args.output_dir)
     if not output_root.is_absolute():
-        output_root = repo_root / output_root
+        output_root = Path.cwd() / output_root
     output_root.mkdir(parents=True, exist_ok=True)
 
     plot_dir: Path | None = None
     if args.plot_dir is not None:
         plot_dir = Path(args.plot_dir)
         if not plot_dir.is_absolute():
-            plot_dir = repo_root / plot_dir
+            plot_dir = Path.cwd() / plot_dir
         plot_dir.mkdir(parents=True, exist_ok=True)
 
     solver_runs: dict[str, list[RunFingerprint]] = {}
@@ -294,14 +307,7 @@ def main() -> int:
     baseline_inv_ok = None
     baseline_inv_reason = None
     baseline_median = None
-    batched_submit_vs_baseline_parity_ok = None
-    batched_submit_vs_baseline_parity_reason = None
-    async_sync_window_vs_baseline_parity_ok = None
-    async_sync_window_vs_baseline_parity_reason = None
-    fixed_dt_batch_vs_baseline_parity_ok = None
-    fixed_dt_batch_vs_baseline_parity_reason = None
-    gpu_resident_batch_vs_baseline_parity_ok = None
-    gpu_resident_batch_vs_baseline_parity_reason = None
+    baseline_parity: dict[str, tuple[bool | None, str]] = {}
 
     if args.include_baseline:
         baseline_runs, baseline_median = _run_group(
@@ -319,35 +325,8 @@ def main() -> int:
         )
         baseline_det_ok, baseline_det_reason = assert_deterministic(baseline_runs)
         baseline_inv_ok, baseline_inv_reason = all_invariants_ok(baseline_runs)
-        if "batched_submit" in solver_runs:
-            batched_submit_vs_baseline_parity_ok, batched_submit_vs_baseline_parity_reason = (
-                compare_fingerprints_exact(
-                    baseline_runs[0],
-                    solver_runs["batched_submit"][0],
-                )
-            )
-        if "async_sync_window" in solver_runs:
-            async_sync_window_vs_baseline_parity_ok, async_sync_window_vs_baseline_parity_reason = (
-                compare_fingerprints_exact(
-                    baseline_runs[0],
-                    solver_runs["async_sync_window"][0],
-                )
-            )
-        if "fixed_dt_batch" in solver_runs:
-            fixed_dt_batch_vs_baseline_parity_ok, fixed_dt_batch_vs_baseline_parity_reason = (
-                compare_fingerprints_exact(
-                    baseline_runs[0],
-                    solver_runs["fixed_dt_batch"][0],
-                )
-            )
-        if "gpu_resident_batch" in solver_runs:
-            (
-                gpu_resident_batch_vs_baseline_parity_ok,
-                gpu_resident_batch_vs_baseline_parity_reason,
-            ) = compare_fingerprints_exact(
-                baseline_runs[0],
-                solver_runs["gpu_resident_batch"][0],
-            )
+        for solver_impl, runs in solver_runs.items():
+            baseline_parity[solver_impl] = compare_fingerprints_exact(baseline_runs[0], runs[0])
 
     summary = {
         "mesh": str(mesh_path),
@@ -386,22 +365,12 @@ def main() -> int:
         "baseline_invariants_ok": baseline_inv_ok,
         "baseline_invariants_reason": baseline_inv_reason,
         "baseline_median_wall_seconds": baseline_median,
-        "batched_submit_vs_baseline_bitwise_parity": batched_submit_vs_baseline_parity_ok,
-        "batched_submit_vs_baseline_bitwise_parity_reason": (
-            batched_submit_vs_baseline_parity_reason
-        ),
-        "async_sync_window_vs_baseline_bitwise_parity": async_sync_window_vs_baseline_parity_ok,
-        "async_sync_window_vs_baseline_bitwise_parity_reason": (
-            async_sync_window_vs_baseline_parity_reason
-        ),
-        "fixed_dt_batch_vs_baseline_bitwise_parity": fixed_dt_batch_vs_baseline_parity_ok,
-        "fixed_dt_batch_vs_baseline_bitwise_parity_reason": (
-            fixed_dt_batch_vs_baseline_parity_reason
-        ),
-        "gpu_resident_batch_vs_baseline_bitwise_parity": gpu_resident_batch_vs_baseline_parity_ok,
-        "gpu_resident_batch_vs_baseline_bitwise_parity_reason": (
-            gpu_resident_batch_vs_baseline_parity_reason
-        ),
+        "baseline_bitwise_parity": {
+            key: value[0] for key, value in sorted(baseline_parity.items())
+        },
+        "baseline_bitwise_parity_reason": {
+            key: value[1] for key, value in sorted(baseline_parity.items())
+        },
     }
     summary_path = output_root / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -416,14 +385,8 @@ def main() -> int:
     if args.include_baseline:
         has_fail = has_fail or (baseline_det_ok is not True)
         has_fail = has_fail or (baseline_inv_ok is not True)
-        if args.require_bitwise_parity and "batched_submit" in solver_runs:
-            has_fail = has_fail or (batched_submit_vs_baseline_parity_ok is not True)
-        if args.require_bitwise_parity and "async_sync_window" in solver_runs:
-            has_fail = has_fail or (async_sync_window_vs_baseline_parity_ok is not True)
-        if args.require_bitwise_parity and "fixed_dt_batch" in solver_runs:
-            has_fail = has_fail or (fixed_dt_batch_vs_baseline_parity_ok is not True)
-        if args.require_bitwise_parity and "gpu_resident_batch" in solver_runs:
-            has_fail = has_fail or (gpu_resident_batch_vs_baseline_parity_ok is not True)
+        if args.require_bitwise_parity:
+            has_fail = has_fail or any(value[0] is not True for value in baseline_parity.values())
 
     if has_fail:
         return 1

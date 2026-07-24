@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from deceris.inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
+from deceris.inundation.tuning import CFL_DEFAULT, DRY_TOL_DEFAULT, GRAVITY_G
 from deceris.inundation.vulkan.fixed_dt_batch import SWESolverFixedDtBatch
 from deceris.inundation.vulkan.fixed_dt_batch_barrier import SWESolverFixedDtBatchBarrier
 from deceris.inundation.vulkan.gpu_resident_batch import SWESolverGpuResidentBatch
@@ -24,9 +25,9 @@ if TYPE_CHECKING:
     from deceris.inundation.vulkan.solver import SWESolver
 
 NX = NY = 128
-G = 9.81
-DRY_TOL = 1e-4
-CFL = 0.45
+G = GRAVITY_G
+DRY_TOL = DRY_TOL_DEFAULT
+CFL = CFL_DEFAULT
 WORKGROUP_SIZE = 256
 DT_MAX = 0.05
 DT_INIT = 1e-2
