@@ -24,3 +24,5 @@ deceris/inundation/results/
 # config uses relative paths. The .sqlite is rebuilt locally via
 # `qmd update` + `qmd embed`.
 .qmd/*.sqlite*
+
+.DS_Store

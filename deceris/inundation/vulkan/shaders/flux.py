@@ -166,14 +166,25 @@ void main() {
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
 
+    // Audusse (2004) hydrostatic-reconstruction source term: compensates the
+    // momentum imbalance introduced by clamping depths to the face elevation
+    // (hLs/hRs above), so still water over a sloped/bumpy bed stays at rest
+    // (the "well-balanced" / C-property fix). Each cell is corrected using
+    // its OWN actual vs. reconstructed depth, added along its OWN outward
+    // normal at this face: +n for cL (nx_,ny_ points cL->cR, i.e. outward
+    // for cL), -n for cR. This is NOT symmetric like the raw flux — do not
+    // "simplify" the two signs to match, that was tried and is wrong.
+    float SL_g = 0.5 * pc.g * (hL * hL - hLs * hLs);
+    float SR_g = 0.5 * pc.g * (hR * hR - hRs * hRs);
+
     atomicAdd(dh[cL],   Fh  * len);
-    atomicAdd(dhu[cL],  Fhu * len);
-    atomicAdd(dhv[cL],  Fhv * len);
+    atomicAdd(dhu[cL],  Fhu * len + SL_g * nx_ * len);
+    atomicAdd(dhv[cL],  Fhv * len + SL_g * ny_ * len);
 
     if (cR >= 0) {
         atomicAdd(dh[cR],  -Fh  * len);
-        atomicAdd(dhu[cR], -Fhu * len);
-        atomicAdd(dhv[cR], -Fhv * len);
+        atomicAdd(dhu[cR], -Fhu * len - SR_g * nx_ * len);
+        atomicAdd(dhv[cR], -Fhv * len - SR_g * ny_ * len);
     }
 }
 
@@ -339,14 +350,20 @@ void main() {
     float Fhu = Fhn * nx_ - Fht * ny_;
     float Fhv = Fhn * ny_ + Fht * nx_;
 
+    // Audusse (2004) hydrostatic-reconstruction source term — see FLUX_GLSL
+    // above for the derivation. Kept identical between the two shader
+    // variants (this one only differs in reading dt from DTBUF).
+    float SL_g = 0.5 * pc.g * (hL * hL - hLs * hLs);
+    float SR_g = 0.5 * pc.g * (hR * hR - hRs * hRs);
+
     atomicAdd(dh[cL],   Fh  * len);
-    atomicAdd(dhu[cL],  Fhu * len);
-    atomicAdd(dhv[cL],  Fhv * len);
+    atomicAdd(dhu[cL],  Fhu * len + SL_g * nx_ * len);
+    atomicAdd(dhv[cL],  Fhv * len + SL_g * ny_ * len);
 
     if (cR >= 0) {
         atomicAdd(dh[cR],  -Fh  * len);
-        atomicAdd(dhu[cR], -Fhu * len);
-        atomicAdd(dhv[cR], -Fhv * len);
+        atomicAdd(dhu[cR], -Fhu * len - SR_g * nx_ * len);
+        atomicAdd(dhv[cR], -Fhv * len - SR_g * ny_ * len);
     }
 }
 

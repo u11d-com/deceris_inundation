@@ -7,14 +7,14 @@ and reproducible analytical benchmarks.
 
 ## Current evidence
 
-The Stoker, Ritter, radial dam-break, and floodplain-depression gates pass with
-the MoltenVK reference. The momentum-obstruction case remains blocked by its
-still-water control, which exposes the known hydrostatic well-balance gap.
+The Stoker, Ritter, radial dam-break, floodplain-depression, and corrected
+lake-at-rest gates pass with the MoltenVK reference. The hydrostatic interface
+correction removes the still-water obstruction leak.
 
 ## Priorities
 
-1. Implement and validate the hydrostatic interface correction against the
-   lake-at-rest and momentum-obstruction controls.
+1. Retune the momentum-obstruction release so genuine momentum overtops the sill
+   without weakening its passing still-water control.
 2. Preserve momentum warm starts and measure mass drift in float64 reporting.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
