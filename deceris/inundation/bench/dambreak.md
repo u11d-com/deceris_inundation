@@ -60,6 +60,8 @@ just benchmark-dambreak --repeats 3 --warmup 1 --gif
 # On the macOS host (unsandboxed, patched kp in .venv):
 .venv/bin/python -m deceris.inundation.bench.dambreak --repeats 3 --warmup 1 --gif
 
+# Explicit backend matrix:
+just benchmark-dambreak --backends gpu_resident_batch,fixed_dt_batch_barrier
 ```
 
 `--repeats >= 2` enables the determinism check; `--warmup` runs are excluded

@@ -1,4 +1,4 @@
-"""Tier 1 analytical dam-break benchmark (validation-plan.md §1, Go/No-Go #1).
+"""Tier 1 analytical dam-break benchmark.
 
 Two closed-form 1D test cases run on a synthetic rectangular channel mesh
 (no external data files):

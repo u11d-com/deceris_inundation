@@ -1,4 +1,4 @@
-"""Tier 1 radially symmetric dam-break benchmark (validation-plan.md §1, Go/No-Go #1).
+"""Tier 1 radially symmetric dam-break benchmark.
 
 The circular dam-break: a cylindrical column of water (radius ``r_dam``,
 depth ``h_in``) collapses over a flat frictionless bed into a shallower
@@ -11,7 +11,7 @@ shock cannot.
 No closed form exists. The reference is a fine-grid 1D axisymmetric
 finite-volume solve (``bench/common.solve_radial_dambreak``); the coarse 2D
 solver's depth is radially binned onto the same radii and gated against it.
-Gates (documented per validation-plan.md §1, not implicit): depth L1/L2 vs
+Gates are explicit: depth L1/L2 against
 the radial reference, bore-front radius error, front-radius isotropy across
 angular sectors, volume drift, positivity, and run-to-run reproducibility.
 
