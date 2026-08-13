@@ -235,7 +235,7 @@ def main() -> int:
     if args.cfl_interval < 1:
         raise ValueError("--cfl-interval must be >= 1")
 
-    # Path resolution uses the current working directory first, then script dir.
+    # Resolve paths from the working directory first, then the script directory.
     # Does NOT assume a fixed monorepo directory depth (no parents[N]).
     script_dir = Path(__file__).resolve().parent
 

@@ -14,16 +14,16 @@ POLYGON_CENTROID_EPSILON = 1e-20
 EDGE_LENGTH_EPSILON = 1e-30
 FACE_NDIM = 2
 
-# ── Mesh (swe_mesh.py) ────────────────────────────────────────────────────────
+# ── Mesh geometry ─────────────────────────────────────────────────────────────
 MIN_POLYGON_VERTICES = 3
 
-# ── Physical + numerical defaults (swe_gpu.py / workflow) ─────────────────────
+# ── Physical and numerical solver defaults ────────────────────────────────────
 GRAVITY_G = 9.81
 DRY_TOL_DEFAULT = 1e-4
 CFL_DEFAULT = 0.45
 REGIME_DRY = 2
 
-# ── Vulkan solver (swe_gpu.py) ────────────────────────────────────────────────
+# ── Vulkan solver ─────────────────────────────────────────────────────────────
 CFL_EPSILON_MIN = 1e-10
 CFL_SANITY_MAX = 1e10
 SIMULATION_TIME_EPSILON = 1e-12

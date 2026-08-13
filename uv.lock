@@ -179,6 +179,7 @@ mesh-parquet = [
 ]
 viz = [
     { name = "matplotlib" },
+    { name = "pillow" },
 ]
 
 [package.metadata]
@@ -188,6 +189,7 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'viz'", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.24,<2.0" },
     { name = "pillow", marker = "extra == 'mesh-gis'", specifier = ">=10.0" },
+    { name = "pillow", marker = "extra == 'viz'", specifier = ">=10.0" },
     { name = "pyarrow", marker = "extra == 'mesh-parquet'" },
     { name = "pymarkdownlnt", marker = "extra == 'dev'", specifier = "==0.9.39" },
     { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.408" },
