@@ -237,6 +237,241 @@ def save_depth_png(
     sys.stdout.flush()
 
 
+def _reordered_polygons(
+    workflow: SWEWorkflow,
+) -> tuple[list[NDArray[np.float32]], NDArray[np.float32]]:
+    """Build per-cell polygons (solver order) + vertex array for plotting."""
+    if workflow.geom is None or workflow.perm is None:
+        raise RuntimeError("Workflow must be prepared before plotting depth")
+    verts = workflow.verts
+    faces_flat = workflow.faces_flat
+    face_offsets = workflow.face_offsets
+    if verts is None or faces_flat is None or face_offsets is None:
+        # Geometry-cache-hit path skips load_mesh_file, so raw mesh vertices
+        # are never populated on the workflow — re-read just for plotting.
+        verts, faces_flat, face_offsets, _zb = load_mesh_file(workflow.config.mesh_source)
+    perm = workflow.perm
+    n_cells = workflow.geom.area.shape[0]
+    polygons: list[NDArray[np.float32]] = []
+    for new_i in range(n_cells):
+        old_i = int(perm[new_i])
+        idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
+        polygons.append(verts[idx])
+    return polygons, verts
+
+
+def save_depth_gif(
+    workflow: SWEWorkflow,
+    snapshots: Sequence[NDArray[np.floating[Any]]],
+    snap_times: Sequence[float],
+    out_path: Path,
+    *,
+    vmax: float,
+    title_prefix: str = "",
+    fps: int = 12,
+) -> None:
+    """Save a top-down water-depth animation (gif). Requires matplotlib + pillow (viz extra)."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.animation as manimation
+        import matplotlib.pyplot as plt
+        from matplotlib.collections import PolyCollection
+        from matplotlib.colors import LinearSegmentedColormap, Normalize
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "matplotlib (+ pillow for the gif writer) is required for the 2D gif. "
+            'Install with: uv pip install -e ".[viz]"'
+        ) from exc
+
+    frames = [
+        (float(t), np.asarray(s, np.float32))
+        for s, t in zip(snapshots, snap_times, strict=True)
+        if t > 0.0
+    ]
+    if not frames:
+        raise RuntimeError("gif run produced no usable snapshots")
+
+    polygons, verts = _reordered_polygons(workflow)
+    if workflow.geom is None:
+        raise RuntimeError("Workflow must be prepared before plotting depth")
+    zb = np.asarray(workflow.geom.zb, np.float32)
+
+    # Terrain background: green gradient by bed elevation (low -> high).
+    terrain_cmap = LinearSegmentedColormap.from_list(
+        "TerrainGreens",
+        ["#14532d", "#3f6212", "#65a30d", "#a3b18a", "#dcedc8"],
+    )
+    z_lo = float(zb.min())
+    z_hi = float(zb.max())
+    if z_hi - z_lo < 1e-6:  # flat bed -> uniform terrain color
+        z_hi = z_lo + 1.0
+    terrain_norm = Normalize(vmin=z_lo, vmax=z_hi)
+
+    # Water overlay: Blues, transparent where dry so the terrain shows through.
+    water_base: NDArray[np.floating[Any]] = cast(
+        "NDArray[np.floating[Any]]",
+        cast("Any", plt.cm.Blues)(np.linspace(0.28, 1.0, 256)),
+    )
+    water_cmap = LinearSegmentedColormap.from_list("BluesOffset", water_base)
+    water_norm = Normalize(vmin=0.0, vmax=vmax)
+    dry_thresh = max(1e-4, 1e-3 * vmax)
+
+    def _water_rgba(h: NDArray[np.floating[Any]]) -> NDArray[np.floating[Any]]:
+        rgba = np.asarray(cast("Any", water_cmap)(water_norm(h)), np.float64)
+        rgba[np.asarray(h) <= dry_thresh, 3] = 0.0
+        return rgba
+
+    _plt: Any = plt
+    _manim: Any = manimation
+    fig: Any
+    ax: Any
+    fig, ax = _plt.subplots(figsize=(6, 5))
+    terrain_pc: Any = PolyCollection(
+        polygons,
+        array=zb,
+        cmap=terrain_cmap,
+        edgecolors="face",
+        linewidths=0.0,
+        norm=terrain_norm,
+    )
+    ax.add_collection(terrain_pc)
+    pc: Any = PolyCollection(
+        polygons,
+        facecolors=_water_rgba(frames[0][1]),
+        edgecolors="face",
+        linewidths=0.0,
+    )
+    ax.add_collection(pc)
+    ax.set_xlim(verts[:, 0].min(), verts[:, 0].max())
+    ax.set_ylim(verts[:, 1].min(), verts[:, 1].max())
+    ax.set_aspect("equal")
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    water_sm: Any = _plt.cm.ScalarMappable(norm=water_norm, cmap=water_cmap)
+    water_sm.set_array(np.empty(0, np.float32))
+    cast("Any", fig).colorbar(terrain_pc, ax=ax, label="bed z [m]")
+    cast("Any", fig).colorbar(water_sm, ax=ax, label="h [m]")
+
+    def _draw(frame: int) -> None:
+        t_snap, h = frames[frame]
+        pc.set_facecolors(_water_rgba(h))
+        ax.set_title(f"{title_prefix}t={t_snap:.2f}s")
+
+    anim: Any = _manim.FuncAnimation(fig, _draw, frames=len(frames), blit=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    anim.save(str(out_path), writer=_manim.PillowWriter(fps=fps))
+    _plt.close(fig)
+    sys.stdout.write(f"[gif] top-down depth animation saved: {out_path} ({len(frames)} frames)\n")
+    sys.stdout.flush()
+
+
+def save_profile_gif(
+    workflow: SWEWorkflow,
+    snapshots: Sequence[NDArray[np.floating[Any]]],
+    snap_times: Sequence[float],
+    out_path: Path,
+    *,
+    vmax: float,
+    title_prefix: str = "",
+    fps: int = 12,
+) -> None:
+    """Save a longitudinal side-view (bed + water surface vs x) animation (gif).
+
+    Cells are aggregated into along-channel (x) bins and averaged across the
+    width, so this is meaningful for prismatic (y-independent) beds such as
+    the momentum-obstruction case. Requires matplotlib + pillow (viz extra).
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.animation as manimation
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "matplotlib (+ pillow for the gif writer) is required for the profile gif. "
+            'Install with: uv pip install -e ".[viz]"'
+        ) from exc
+
+    if workflow.geom is None:
+        raise RuntimeError("Workflow must be prepared before plotting a profile")
+
+    frames = [
+        (float(t), np.asarray(s, np.float32))
+        for s, t in zip(snapshots, snap_times, strict=True)
+        if t > 0.0
+    ]
+    if not frames:
+        raise RuntimeError("gif run produced no usable snapshots")
+
+    cx = np.asarray(workflow.geom.centroid[:, 0], np.float64)
+    zb = np.asarray(workflow.geom.zb, np.float64)
+
+    # Aggregate into along-channel bins (average across the width per x).
+    xs, inv = np.unique(np.round(cx, 6), return_inverse=True)
+    counts = np.bincount(inv).astype(np.float64)
+    zb_prof = np.bincount(inv, weights=zb) / counts
+    order = np.argsort(xs)
+    xs = xs[order]
+    zb_prof = zb_prof[order]
+
+    def _profile(h: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
+        h_prof = np.bincount(inv, weights=np.asarray(h, np.float64)) / counts
+        return h_prof[order]
+
+    dry_thresh = max(1e-4, 1e-3 * vmax)
+    wse_max = max(float((zb_prof + _profile(h)).max()) for _t, h in frames)
+    z_lo = float(zb_prof.min())
+    z_hi = max(float(zb_prof.max()), wse_max)
+    pad = 0.08 * max(z_hi - z_lo, 1.0)
+
+    _plt: Any = plt
+    _manim: Any = manimation
+    fig: Any
+    ax: Any
+    fig, ax = _plt.subplots(figsize=(8, 4))
+    ax.fill_between(xs, z_lo - pad, zb_prof, color="#6b4f2a", zorder=1)
+    ax.plot(xs, zb_prof, color="#3f2d16", linewidth=1.2, zorder=3)
+    water_artists: list[Any] = []
+
+    def _draw(frame: int) -> None:
+        t_snap, h = frames[frame]
+        for art in water_artists:
+            art.remove()
+        water_artists.clear()
+        prof = _profile(h)
+        wse = zb_prof + prof
+        wet = prof > dry_thresh
+        fill = ax.fill_between(xs, zb_prof, wse, where=wet, color="#2563eb", alpha=0.75, zorder=2)
+        water_artists.append(fill)
+        (line,) = ax.plot(
+            np.where(wet, xs, np.nan),
+            np.where(wet, wse, np.nan),
+            color="#1e3a8a",
+            linewidth=1.0,
+            zorder=4,
+        )
+        water_artists.append(line)
+        ax.set_title(f"{title_prefix}t={t_snap:.2f}s (side view)")
+
+    ax.set_xlim(float(xs.min()), float(xs.max()))
+    ax.set_ylim(z_lo - pad, z_hi + pad)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("elevation [m]")
+    _draw(0)
+
+    anim: Any = _manim.FuncAnimation(fig, _draw, frames=len(frames), blit=False)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    anim.save(str(out_path), writer=_manim.PillowWriter(fps=fps))
+    _plt.close(fig)
+    sys.stdout.write(
+        f"[gif] side-view profile animation saved: {out_path} ({len(frames)} frames)\n"
+    )
+    sys.stdout.flush()
+
+
 def build_pipeline_like_phases(
     workflow: SWEWorkflow,
     phase_duration_s: float,
@@ -318,3 +553,422 @@ def write_fingerprint_json(fingerprint: RunFingerprint, out_path: Path) -> None:
 
 def median_wall(runs: list[RunFingerprint]) -> float:
     return statistics.median(fp.wall_seconds for fp in runs)
+
+
+# ── Analytical dam-break test cases (validation-plan.md §1 Tier 1) ──────────
+
+
+def build_channel_mesh(
+    nx: int, ny: int, length: float, width: float
+) -> tuple[NDArray[np.float32], NDArray[np.int32]]:
+    """Regular quad grid on a [0, length] x [0, width] channel (verts, quads)."""
+    xs = np.linspace(0.0, length, nx + 1)
+    ys = np.linspace(0.0, width, ny + 1)
+    xv, yv = np.meshgrid(xs, ys, indexing="xy")
+    verts = np.column_stack([xv.ravel(), yv.ravel()]).astype(np.float32)
+
+    def vid(i: int, j: int) -> int:
+        return j * (nx + 1) + i
+
+    quads = np.array(
+        [
+            [vid(i, j), vid(i + 1, j), vid(i + 1, j + 1), vid(i, j + 1)]
+            for j in range(ny)
+            for i in range(nx)
+        ],
+        dtype=np.int32,
+    )
+    return verts, quads
+
+
+def write_mesh_parquet(
+    out_path: Path,
+    verts: NDArray[np.float32],
+    faces: NDArray[np.int32],
+    zb: NDArray[np.float32],
+) -> None:
+    """Write a polygon mesh + per-cell ``z_mean`` bed as a parquet mesh file.
+
+    Produces the same WKB-geometry + ``z_mean`` layout ``load_mesh_file``
+    reads back. Needed because ``build_geometry`` substitutes a synthetic
+    sinusoidal bed when the mesh file carries no bed attribute — analytical
+    flat-bed cases must pass zb explicitly. Requires the ``mesh-parquet``
+    extra (pyarrow + shapely).
+    """
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        import shapely
+        from shapely import Polygon
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "pyarrow + shapely are required to write a synthetic benchmark mesh. "
+            'Install with: uv pip install -e ".[mesh-parquet]"'
+        ) from exc
+
+    if faces.ndim != 2:
+        raise ValueError(f"faces must be (N, degree), got shape {faces.shape}")
+    if zb.shape[0] != faces.shape[0]:
+        raise ValueError(f"zb has {zb.shape[0]} rows, expected {faces.shape[0]}")
+
+    # shapely + pyarrow inference is patchy under strict pyright (see the
+    # executionEnvironments note in pyproject.toml) — go through Any aliases
+    # (shapely.to_wkb's overloads are partially unknown even at import).
+    _pq: Any = cast("Any", pq)
+    _to_wkb: Any = cast("Any", shapely).to_wkb
+    wkb_list: list[bytes] = [cast("bytes", _to_wkb(Polygon(verts[face]))) for face in faces]
+    _pa: Any = pa
+    table: Any = _pa.table(
+        {
+            "geometry": _pa.array(wkb_list, type=_pa.binary()),
+            "z_mean": _pa.array(zb.astype(np.float64), type=_pa.float64()),
+        }
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _pq.write_table(table, out_path)
+
+
+def ritter_solution(
+    x: NDArray[np.floating[Any]],
+    t: float,
+    *,
+    h_up: float,
+    dam_x: float,
+    g: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Exact Ritter (1892) dry-bed dam-break depth/velocity profile at time t.
+
+    Instantaneous dam removal at ``dam_x`` over a flat frictionless bed,
+    upstream depth ``h_up``, downstream dry. Wet front advances at
+    ``2*sqrt(g*h_up)``.
+    """
+    if t <= 0.0:
+        raise ValueError(f"t must be positive, got {t}")
+    xi = (np.asarray(x, dtype=np.float64) - dam_x) / t
+    c0 = float(np.sqrt(g * h_up))
+
+    h = np.zeros_like(xi)
+    u = np.zeros_like(xi)
+
+    upstream = xi <= -c0
+    h[upstream] = h_up
+
+    fan = (~upstream) & (xi < 2.0 * c0)
+    h[fan] = (2.0 * c0 - xi[fan]) ** 2 / (9.0 * g)
+    u[fan] = 2.0 * (xi[fan] + c0) / 3.0
+    return h, u
+
+
+def stoker_middle_depth(h_up: float, h_down: float, g: float) -> float:
+    """Constant-state depth h_m of the Stoker (1957) wet-bed dam-break.
+
+    Root of the rarefaction/shock matching condition, solved by bisection
+    on (h_down, h_up) — no scipy dependency.
+    """
+    if not 0.0 < h_down < h_up:
+        raise ValueError(f"need 0 < h_down < h_up, got h_down={h_down}, h_up={h_up}")
+    c0 = float(np.sqrt(g * h_up))
+
+    def f(hm: float) -> float:
+        # u_m from the rarefaction (left) minus u_m from the shock jump (right).
+        cm = float(np.sqrt(g * hm))
+        u_rarefaction = 2.0 * (c0 - cm)
+        u_shock = (hm - h_down) * float(np.sqrt(g * (hm + h_down) / (2.0 * hm * h_down)))
+        return u_rarefaction - u_shock
+
+    lo, hi = h_down, h_up
+    if f(lo) <= 0.0 or f(hi) >= 0.0:
+        raise ValueError(f"bisection bracket invalid for h_up={h_up}, h_down={h_down}")
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if f(mid) > 0.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def stoker_solution(
+    x: NDArray[np.floating[Any]],
+    t: float,
+    *,
+    h_up: float,
+    h_down: float,
+    dam_x: float,
+    g: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Exact Stoker (1957) wet-bed dam-break depth/velocity profile at time t.
+
+    Four regions: undisturbed upstream, rarefaction fan, constant state
+    (h_m, u_m), and undisturbed downstream behind the bore front.
+    """
+    if t <= 0.0:
+        raise ValueError(f"t must be positive, got {t}")
+    xi = (np.asarray(x, dtype=np.float64) - dam_x) / t
+    c0 = float(np.sqrt(g * h_up))
+
+    hm = stoker_middle_depth(h_up, h_down, g)
+    cm = float(np.sqrt(g * hm))
+    um = 2.0 * (c0 - cm)
+    shock_speed = um * hm / (hm - h_down)
+
+    h = np.full_like(xi, h_down)
+    u = np.zeros_like(xi)
+
+    upstream = xi <= -c0
+    h[upstream] = h_up
+
+    fan = (~upstream) & (xi < um - cm)
+    h[fan] = (2.0 * c0 - xi[fan]) ** 2 / (9.0 * g)
+    u[fan] = 2.0 * (xi[fan] + c0) / 3.0
+
+    plateau = (xi >= um - cm) & (xi < shock_speed)
+    h[plateau] = hm
+    u[plateau] = um
+    return h, u
+
+
+def _radial_hll_flux(
+    hL: NDArray[np.float64],
+    mL: NDArray[np.float64],
+    hR: NDArray[np.float64],
+    mR: NDArray[np.float64],
+    g: float,
+    dry_tol: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """HLL mass/momentum flux for the planar SWE part of the radial system."""
+    uL = np.where(hL > dry_tol, mL / np.maximum(hL, dry_tol), 0.0)
+    uR = np.where(hR > dry_tol, mR / np.maximum(hR, dry_tol), 0.0)
+    cL = np.sqrt(g * np.maximum(hL, 0.0))
+    cR = np.sqrt(g * np.maximum(hR, 0.0))
+
+    fh_l, fh_r = mL, mR
+    fm_l = mL * uL + 0.5 * g * hL * hL
+    fm_r = mR * uR + 0.5 * g * hR * hR
+
+    s_l = np.minimum(uL - cL, uR - cR)
+    s_r = np.maximum(uL + cL, uR + cR)
+    denom = np.where(s_r - s_l != 0.0, s_r - s_l, 1.0)
+    fh_hll = (s_r * fh_l - s_l * fh_r + s_l * s_r * (hR - hL)) / denom
+    fm_hll = (s_r * fm_l - s_l * fm_r + s_l * s_r * (mR - mL)) / denom
+
+    fh = np.where(s_l >= 0.0, fh_l, np.where(s_r <= 0.0, fh_r, fh_hll))
+    fm = np.where(s_l >= 0.0, fm_l, np.where(s_r <= 0.0, fm_r, fm_hll))
+    return fh, fm
+
+
+def solve_radial_dambreak(
+    t: float,
+    *,
+    h_in: float,
+    h_out: float,
+    r_dam: float,
+    g: float,
+    r_max: float,
+    n_cells: int = 2000,
+    cfl: float = 0.9,
+    dry_tol: float = 1e-8,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Fine-grid 1D radial finite-volume reference for the circular dam-break.
+
+    Solves the axisymmetric shallow-water equations (no closed form exists)
+
+        d(r h)/dt   + d(r h u)/dr            = 0
+        d(r h u)/dt + d(r (h u^2 + g h^2/2))/dr = g h^2 / 2
+
+    with a first-order HLL flux and SSP-RK2 (Heun) time stepping on
+    ``n_cells`` cells over ``[0, r_max]``. The ``r``-weighting makes the
+    inner (r=0) face flux vanish by construction (radial symmetry) and
+    conserves annular mass to round-off. Returns ``(r_centers, h, u)`` at
+    time ``t``; use it as the quasi-exact reference for a much coarser 2D
+    solver whose depth is radially binned onto the same radii.
+    """
+    if t <= 0.0:
+        raise ValueError(f"t must be positive, got {t}")
+    if not 0.0 < r_dam < r_max:
+        raise ValueError(f"need 0 < r_dam < r_max, got r_dam={r_dam}, r_max={r_max}")
+
+    dr = r_max / n_cells
+    r_c = (np.arange(n_cells, dtype=np.float64) + 0.5) * dr
+    r_f = np.arange(n_cells + 1, dtype=np.float64) * dr
+
+    h = np.where(r_c < r_dam, h_in, h_out).astype(np.float64)
+    m = np.zeros(n_cells, dtype=np.float64)
+
+    def rhs(
+        hs: NDArray[np.float64], ms: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        us = np.where(hs > dry_tol, ms / np.maximum(hs, dry_tol), 0.0)
+        fh_int, fm_int = _radial_hll_flux(hs[:-1], ms[:-1], hs[1:], ms[1:], g, dry_tol)
+        fh_face = np.empty(n_cells + 1, dtype=np.float64)
+        fm_face = np.empty(n_cells + 1, dtype=np.float64)
+        fh_face[1:-1] = fh_int
+        fm_face[1:-1] = fm_int
+        # Inner face at r=0: r-weight is 0, so mass contribution vanishes and
+        # radial symmetry (u=0) is enforced automatically.
+        fh_face[0] = 0.0
+        fm_face[0] = 0.5 * g * hs[0] * hs[0]
+        # Outer face: transmissive (the wave never reaches r_max here).
+        fh_face[-1] = ms[-1]
+        fm_face[-1] = ms[-1] * us[-1] + 0.5 * g * hs[-1] * hs[-1]
+
+        rf_h = r_f * fh_face
+        rf_m = r_f * fm_face
+        dh = -(rf_h[1:] - rf_h[:-1]) / (dr * r_c)
+        dm = (-(rf_m[1:] - rf_m[:-1]) / dr + 0.5 * g * hs * hs) / r_c
+        return dh, dm
+
+    elapsed = 0.0
+    max_steps = 1_000_000
+    for _ in range(max_steps):
+        if elapsed >= t:
+            break
+        u = np.where(h > dry_tol, m / np.maximum(h, dry_tol), 0.0)
+        wave = np.abs(u) + np.sqrt(g * np.maximum(h, 0.0))
+        max_wave = float(wave.max())
+        dt = cfl * dr / max_wave if max_wave > 0.0 else t - elapsed
+        dt = min(dt, t - elapsed)
+
+        dh1, dm1 = rhs(h, m)
+        h1 = np.maximum(h + dt * dh1, 0.0)
+        m1 = np.where(h1 > dry_tol, m + dt * dm1, 0.0)
+        dh2, dm2 = rhs(h1, m1)
+        h = np.maximum(h + 0.5 * dt * (dh1 + dh2), 0.0)
+        m = np.where(h > dry_tol, m + 0.5 * dt * (dm1 + dm2), 0.0)
+        elapsed += dt
+
+    u_final = np.where(h > dry_tol, m / np.maximum(h, dry_tol), 0.0)
+    return r_c, h, u_final
+
+
+def radial_dambreak_reference(
+    r_eval: NDArray[np.floating[Any]],
+    t: float,
+    *,
+    h_in: float,
+    h_out: float,
+    r_dam: float,
+    g: float,
+    r_max: float,
+    n_cells: int = 2000,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Reference (h, u) of the circular dam-break sampled at radii ``r_eval``.
+
+    Thin wrapper over :func:`solve_radial_dambreak` that linearly
+    interpolates the fine radial grid onto the coarse evaluation radii.
+    """
+    r_c, h, u = solve_radial_dambreak(
+        t, h_in=h_in, h_out=h_out, r_dam=r_dam, g=g, r_max=r_max, n_cells=n_cells
+    )
+    r_eval64 = np.asarray(r_eval, dtype=np.float64)
+    return np.interp(r_eval64, r_c, h), np.interp(r_eval64, r_c, u)
+
+
+# ── EA Test 2: flattened egg-box floodplain-depression bed ──────────────────
+
+
+def eggbox_depression_centers(domain_l: float, n_per_side: int) -> NDArray[np.float64]:
+    """Centers of the ``n_per_side`` x ``n_per_side`` depression grid.
+
+    Ordered column-major from the bottom-left, matching the Environment
+    Agency Test 2 output-point numbering: point ``p`` (1-based) sits at
+    ``col * n_per_side + row + 1`` with columns running west→east (``x``) and
+    rows south→north (``y``). So ``p = 1`` is the SW depression and
+    ``p = n_per_side**2`` is the NE one.
+    """
+    step = domain_l / n_per_side
+    coords = (np.arange(n_per_side, dtype=np.float64) + 0.5) * step
+    centers = np.empty((n_per_side * n_per_side, 2), dtype=np.float64)
+    k = 0
+    for col in range(n_per_side):
+        for row in range(n_per_side):
+            centers[k, 0] = coords[col]
+            centers[k, 1] = coords[row]
+            k += 1
+    return centers
+
+
+def eggbox_bed(
+    cx: NDArray[np.floating[Any]],
+    cy: NDArray[np.floating[Any]],
+    *,
+    domain_l: float,
+    n_per_side: int = 4,
+    plateau_z: float = 0.0,
+    ne_rise_m: float = 0.0,
+    dep_radius_m: float,
+    dep_depth_m: float,
+) -> NDArray[np.float32]:
+    """Flattened egg-box bed elevation at cell centers ``(cx, cy)``.
+
+    A flat plateau (``plateau_z``) with a gentle rise toward the NE corner
+    (``ne_rise_m`` total, distributed as ``(x + y) / (2 * domain_l)``) and
+    ``n_per_side**2`` smooth circular depressions of depth ``dep_depth_m`` and
+    radius ``dep_radius_m`` carved into it. Each depression is a raised-cosine
+    (Hann) bowl: full depth at its center, blending C¹-smoothly back to the
+    surrounding surface at ``dep_radius_m``. The NE rise makes the top-right
+    depressions structurally the highest ground, so the far corner stays dry
+    under a top-left inflow (the EA Test 2 result: points 15 & 16 remain dry).
+    """
+    x = np.asarray(cx, dtype=np.float64)
+    y = np.asarray(cy, dtype=np.float64)
+    z = np.full(x.shape, float(plateau_z), dtype=np.float64)
+    z += ne_rise_m * ((x + y) / (2.0 * domain_l))
+    for cxk, cyk in eggbox_depression_centers(domain_l, n_per_side):
+        d = np.sqrt((x - cxk) ** 2 + (y - cyk) ** 2)
+        bowl = 0.5 * (1.0 + np.cos(np.pi * np.clip(d / dep_radius_m, 0.0, 1.0)))
+        z -= np.where(d < dep_radius_m, dep_depth_m * bowl, 0.0)
+    return z.astype(np.float32)
+
+
+# ── EA Test 3: sloping channel, obstruction between two depressions ─────────
+
+
+def sloping_obstruction_bed(
+    cx: NDArray[np.floating[Any]],
+    *,
+    control_x: Sequence[float],
+    control_z: Sequence[float],
+    smoothing_m: float = 0.0,
+) -> NDArray[np.float32]:
+    """Prismatic (y-independent) bed for the EA Test 3 momentum case.
+
+    The bed elevation is the linear interpolation of the ``(control_x,
+    control_z)`` control points along ``x`` and is uniform across ``y``. The
+    momentum-obstruction harness traces a closed flat-base trap: tall
+    containment walls, two flat-bottomed bowls (Point 1, Point 2), and a
+    flat-topped central sill (the obstruction) between them. ``control_x`` must
+    be strictly increasing and span the mesh's ``x`` range so no cell falls
+    outside the interpolation.
+
+    ``smoothing_m`` (Gaussian sigma, in x-units) rounds the piecewise-linear
+    slope breaks: the profile is evaluated on a dense internal grid, convolved
+    with a truncated Gaussian (edge-padded so the flat end segments are
+    preserved), then resampled at ``cx``. ``0.0`` (default) is the exact
+    piecewise-linear bed; wide flat regions stay flat in their interior and
+    only the corners round.
+    """
+    xs = np.asarray(control_x, dtype=np.float64)
+    zs = np.asarray(control_z, dtype=np.float64)
+    if xs.ndim != 1 or xs.shape != zs.shape:
+        raise ValueError("control_x and control_z must be 1-D arrays of equal length")
+    if np.any(np.diff(xs) <= 0.0):
+        raise ValueError("control_x must be strictly increasing")
+    cx64 = np.asarray(cx, dtype=np.float64)
+    if smoothing_m <= 0.0:
+        return np.interp(cx64, xs, zs).astype(np.float32)
+
+    x_lo = float(xs[0])
+    x_hi = float(xs[-1])
+    step = smoothing_m / 8.0
+    n_dense = max(int(np.ceil((x_hi - x_lo) / step)) + 1, 2)
+    dense_x: NDArray[np.float64] = np.linspace(x_lo, x_hi, n_dense)
+    dense_z: NDArray[np.float64] = np.interp(dense_x, xs, zs)
+    sigma_cells = smoothing_m / float(dense_x[1] - dense_x[0])
+    radius = int(np.ceil(3.0 * sigma_cells))
+    offsets: NDArray[np.float64] = np.arange(-radius, radius + 1, dtype=np.float64)
+    kernel: NDArray[np.float64] = np.exp(-0.5 * (offsets / sigma_cells) ** 2)
+    kernel = kernel / float(kernel.sum())
+    padded: NDArray[np.float64] = np.pad(dense_z, radius, mode="edge")
+    smoothed: NDArray[np.float64] = np.convolve(padded, kernel, mode="valid")
+    return np.interp(cx64, dense_x, smoothed).astype(np.float32)

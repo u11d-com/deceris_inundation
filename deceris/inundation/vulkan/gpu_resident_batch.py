@@ -267,6 +267,8 @@ class SWESolverGpuResidentBatch(SWESolver):
                 snap_times.append(t_sim)
                 next_output_time += output_interval_s
 
+        self.steps_total += step
+
         h_final = self.download_h()
         if not snapshots or not np.allclose(snapshots[-1], h_final):
             snapshots.append(h_final.copy())
