@@ -37,6 +37,8 @@ from deceris.inundation.bench.momentum_obstruction import (
     _original_cell_centroids,
 )
 
+from ._fixtures import requires_ea_dataset
+
 
 def _spec(**over: object) -> ObstructionSpec:
     base: dict[str, object] = {
@@ -55,6 +57,7 @@ def _spec(**over: object) -> ObstructionSpec:
     return ObstructionSpec(**base)  # pyright: ignore[reportArgumentType]
 
 
+@requires_ea_dataset
 class TestDemProfile:
     def test_parses_and_is_finite(self) -> None:
         x, z = _load_dem_profile(_spec().dem_path)
@@ -90,6 +93,7 @@ class TestDemProfile:
         assert abs(_crest_z(_spec()) - 10.0) < 0.01
 
 
+@requires_ea_dataset
 class TestHydrograph:
     def test_parses_published_curve(self) -> None:
         t, q = _load_hydrograph(_spec().bc_path)
@@ -143,6 +147,7 @@ class TestInitialState:
             assert not arr.any()
 
 
+@requires_ea_dataset
 class TestStillWaterControl:
     def test_dataset_fills_depression_to_the_brim(self) -> None:
         # The published design: inflow volume ~= Point 1 capacity below the

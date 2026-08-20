@@ -34,6 +34,8 @@ from deceris.inundation.bench.floodplain_depressions import (
     _load_hydrograph,
 )
 
+from ._fixtures import requires_ea_dataset
+
 # Published hydrograph: 0 -> 20 m^3/s over 5 min, 76 min plateau, 5 min recession.
 PUBLISHED_VOLUME_M3 = 0.5 * 20.0 * 300.0 + 20.0 * 76.0 * 60.0 + 0.5 * 20.0 * 300.0
 
@@ -54,6 +56,7 @@ def _spec(**over: object) -> DepressionSpec:
     return DepressionSpec(**base)  # pyright: ignore[reportArgumentType]
 
 
+@requires_ea_dataset
 class TestDemRaster:
     def test_header_matches_published_raster(self) -> None:
         grid = load_ascii_grid(_spec().dem_path)
@@ -82,6 +85,7 @@ class TestDemRaster:
         assert float(north.mean()) > float(south.mean())
 
 
+@requires_ea_dataset
 class TestBedGrid:
     def test_shape_and_ordering(self) -> None:
         spec = _spec()
@@ -127,6 +131,7 @@ class TestBedGrid:
             )
 
 
+@requires_ea_dataset
 class TestGauges:
     def test_sixteen_published_points(self) -> None:
         gauges = _load_gauges(_spec().gauges_path)
@@ -152,6 +157,7 @@ class TestGauges:
             assert float(zb[j - 5 : j + 6, i - 5 : i + 6].max()) - float(zb[j, i]) > 0.3
 
 
+@requires_ea_dataset
 class TestHydrograph:
     def test_times_are_converted_from_minutes(self) -> None:
         t, q = _load_hydrograph(_spec().bc_path)
@@ -183,6 +189,7 @@ class TestHydrograph:
 
 
 class TestDepressionBasins:
+    @requires_ea_dataset
     def test_every_output_point_sits_in_a_closed_basin(self) -> None:
         spec = _spec()
         zb = _bed_grid(spec)
@@ -193,6 +200,7 @@ class TestDepressionBasins:
             assert pool.size > 1
             assert capacity > 0.0
 
+    @requires_ea_dataset
     def test_basin_storage_exceeds_the_injected_volume(self) -> None:
         # The floodplain can hold more than the hydrograph delivers, so the
         # far column cannot fill through — which is what the harness gates.

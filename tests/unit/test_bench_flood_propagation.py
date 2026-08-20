@@ -31,6 +31,8 @@ from deceris.inundation.bench.flood_propagation import (
     _max_rel_error,
 )
 
+from ._fixtures import requires_ea_dataset
+
 # Published hydrograph: 0 -> 20 m^3/s over 55 min, 180 min plateau, 60 min recession.
 PUBLISHED_VOLUME_M3 = 0.5 * 20.0 * 55.0 * 60.0 + 20.0 * 180.0 * 60.0 + 0.5 * 20.0 * 60.0 * 60.0
 
@@ -68,6 +70,7 @@ def _cheap_reference(**over: object) -> object:
     return solve_radial_inflow([300.0, 600.0], **kwargs)  # pyright: ignore[reportArgumentType]
 
 
+@requires_ea_dataset
 class TestGauges:
     def test_six_published_points(self) -> None:
         assert _load_gauges(_spec().gauges_path).shape == (6, 2)
@@ -91,6 +94,7 @@ class TestGauges:
         assert float(radii.max()) < 0.5 * min(DOMAIN_X_M, DOMAIN_Y_M / 2.0)
 
 
+@requires_ea_dataset
 class TestHydrograph:
     def test_times_are_converted_from_minutes(self) -> None:
         t, q = _load_hydrograph(_spec().bc_path)
