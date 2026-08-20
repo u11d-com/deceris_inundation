@@ -1,43 +1,45 @@
 """EA Test 3 benchmark: momentum conservation over a small obstruction.
 
-A synthetic, closed-domain adaptation of the UK Environment Agency
-"Benchmarking of 2D Hydraulic Modelling Packages" Test 3. The published test
-drives flow down a slope past an obstruction with an *open* downstream
-outlet; this solver has only reflective (closed) walls, so the case is recast
-as a finite dam-break *release* in a closed trap while keeping the physics
-under test: whether the solver's momentum (inertia) terms carry fast flow
-over a barrier it could never cross by water-surface gradient alone.
+Runs the UK Environment Agency "Benchmarking of 2D Hydraulic Modelling
+Packages" Test 3 from the published May-2010 dataset
+(``Benchmarking_Model_Data/Test3 dataset 2010``): the georeferenced ASCII
+DEM (``test3DEM.asc``, prismatic 1:200 slope with two depressions separated
+by an obstruction) and the upstream inflow hydrograph (``Test3BC.csv``,
+65.5 m^3/s plateau, 1310 m^3 total). Modelled area per the spec: x in
+[0, 300] m by y in [0, 100] m, Manning n = 0.01 uniform, dry-bed initial
+condition, run to t = 900 s. Gauges per the spec: Point 1 (150, 50) in the
+first depression, Point 2 (250, 50) in the second.
 
-Geometry (prismatic, left to right): an elevated reservoir shelf flush
-against the left domain boundary (the mesh boundary itself is the reflective
-containment wall, as in the dam-break benches — no bed-built walls, whose
-steep dry faces provoke spurious numerical run-up), a steep slope down into a
-deep flat-bottomed valley (Point 1), a rise to a flat-topped sill (the
-obstruction), and a second flat-bottomed bowl (Point 2) running to the right
-boundary. At t = 0 a block of still water standing on the shelf is released
-(dam-break initial condition — no sources): it accelerates down the slope,
-crosses the valley as a bore, and runs up and *over* the sill into Point 2.
+The physics under test: whether the solver's momentum (inertia) terms carry
+fast flow over a barrier it could never cross by water-surface gradient
+alone. The inflow travels ~150 m down the 1:200 slope and arrives at the
+first depression as a fast bore. By design the total inflow volume is *just
+sufficient* to fill the first depression to the obstruction crest — an
+inertia-free (diffusive-wave) model moves water strictly down surface
+gradients, so at best it fills the depression and stops, and Point 2 stays
+dry; only conserved momentum carries water over the crest, so any settled
+pond at Point 2 is the momentum signature the published intercomparison
+looks for.
 
-The discriminator is volumetric, not visual: the release is sized so that
-even if *all* of it ponded in the valley, the static water surface would top
-out ~0.25 m *below* the sill crest. An inertia-free (diffusive-wave) model
-moves water strictly down surface gradients, so it can never raise the valley
-surface above that ceiling and Point 2 stays dry; only conserved momentum can
-carry water over the crest. Any settled pond in Point 2 is therefore an
-unambiguous momentum signature (both ponds settle below the crest,
-hydraulically disconnected). Every backend run is paired with an untimed
-*still-water control*: the same volume placed at rest at that static ceiling.
-A well-balanced solver must keep the control's Point 2 dry — if it leaks over
-the crest from rest, Point 2 ponding is a numerical well-balance artifact,
-not momentum, and the case fails with an explicit reason.
+One adaptation: this solver has no open-boundary inflow, so the hydrograph
+is injected as near-boundary *volume* sources (a line of point sources
+hugging the upstream wall). This is conservative for the discriminator — the
+sources add mass with zero momentum, and all momentum is acquired on the
+slope descent exactly as in the published setup (all other boundaries are
+closed per the spec; this solver's walls are reflective).
 
-Like EA Test 2, this is a model-*intercomparison* benchmark with no closed
-form and no external DEM (repo convention: synthetic, self-contained meshes);
-the bed is generated analytically (`bench/common.sloping_obstruction_bed`).
-Acceptance is invariant/qualitative: closed-domain volume conservation,
-positivity / wetting-drying stability, a settled valley pond, both pond
-surfaces below the sill crest, and — the momentum signature — a measurable
-pond in Point 2 past the obstruction.
+Every backend run is paired with an untimed *still-water control*: the same
+volume placed at rest in the first depression, filled to the crest (the
+deepest lake any gradient-driven transport could build). A well-balanced
+solver must keep the control's Point 2 dry — if it leaks over the crest from
+rest, Point 2 ponding is a numerical well-balance artifact, not momentum,
+and the case fails with an explicit reason.
+
+There is no closed form (model-*intercomparison* benchmark); acceptance is
+invariant/qualitative: mass balance against the injected hydrograph volume,
+positivity / wetting-drying stability, a settled Point 1 pond, both pond
+surfaces below the crest, and — the momentum signature — a measurable pond
+at Point 2 past the obstruction.
 
 Backends are configurable (`--backends`) across the retained Vulkan solver
 implementations. The release is a pure initial condition with zero sources.
@@ -61,12 +63,14 @@ import numpy as np
 
 from deceris.inundation.bench.common import (
     build_channel_mesh,
+    load_ascii_grid,
+    resample_snapshots_uniform,
     save_depth_gif,
     save_profile_gif,
-    sloping_obstruction_bed,
     write_mesh_parquet,
 )
 from deceris.inundation.workflow import (
+    PointSource,
     SimulationPhase,
     SWEWorkflow,
     WorkflowConfig,
@@ -76,91 +80,85 @@ from deceris.inundation.workflow import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-# ── Case geometry / physics (defaults; see _build_parser for overrides) ─────
-# Mesh coordinates run x in [0, CHANNEL_LEN_M], y in [0, CHANNEL_WIDTH_M].
-# The bed is prismatic (uniform across the width), left to right: an elevated
-# reservoir shelf (the release block stands here, flush against the left
-# boundary), a steep slope down into a deep flat-bottomed valley (Point 1),
-# a rise to a flat-topped sill (the obstruction), and a second flat-bottomed
-# bowl (Point 2) running to the right boundary. Containment is the closed
-# mesh boundary itself (reflective walls); the bed has no built walls — steep
-# dry bed faces provoke spurious numerical run-up. Datum is the sill top.
-CHANNEL_LEN_M = 300.0
-CHANNEL_WIDTH_M = 60.0
-NX_DEFAULT = 150  # dx = 2 m
-NY_DEFAULT = 12  # dy = 5 m
-
-SHELF_Z_M = 1.2  # elevated reservoir shelf the release block stands on
-BOWL_FLOOR_Z_M = -0.6  # valley (Point 1) and far bowl (Point 2) floors
-SILL_Z_M = 0.0  # obstruction crest between the two bowls
-RESERVOIR_X0_M = 0.0  # release block spans [X0, X1] on the shelf
-RESERVOIR_X1_M = 30.0
-POINT1_X_M = 127.0  # valley floor centre (flat floor x in [94, 160])
-CREST_X_M = 190.0  # sill crest gauge (flat top x in [175, 205])
-POINT2_X_M = 250.0  # far bowl floor centre (flat floor x in [220, 300])
-CREST_Z_M = SILL_Z_M
-CONTROL_X = (0.0, 44.0, 94.0, 160.0, 175.0, 205.0, 220.0, 300.0)
-CONTROL_Z = (
-    SHELF_Z_M,  # reservoir shelf (release block stands here)
-    SHELF_Z_M,
-    BOWL_FLOOR_Z_M,  # slope foot: flat valley floor (Point 1)
-    BOWL_FLOOR_Z_M,
-    SILL_Z_M,  # rise to the sill flat top (the obstruction)
-    SILL_Z_M,
-    BOWL_FLOOR_Z_M,  # drop into the flat far bowl (Point 2)
-    BOWL_FLOOR_Z_M,  # far bowl runs to the right boundary
+# ── Case geometry / physics (published dataset; see _build_parser) ──────────
+# Dataset files (May-2010 EA benchmark distribution, checked into the repo).
+DEFAULT_DATASET_DIR = (
+    Path(__file__).resolve().parents[3] / "Benchmarking_Model_Data" / "Test3 dataset 2010"
 )
+DEM_FILENAME = "test3DEM.asc"
+BC_FILENAME = "Test3BC.csv"
 
-# Channel roughness.
-MANNING_N = 0.03
+# Modelled area per the spec: a perfect rectangle x in [0, 300] m by y in
+# [0, 100] m (the DEM raster carries an apron beyond it, x in [-50, 322]).
+# Mesh coordinates coincide with the DEM's georeference, so gauge locations
+# are used as published. All boundaries are closed (reflective walls); the
+# published inflow enters along the upstream (x = 0) edge.
+CHANNEL_LEN_M = 300.0
+CHANNEL_WIDTH_M = 100.0
+NX_DEFAULT = 150  # dx = 2 m (native DEM resolution)
+NY_DEFAULT = 50  # dy = 2 m
 
-# Bed smoothing (Gaussian sigma, m): rounds the piecewise-linear slope breaks
-# (shelf->slope, slope->valley, valley->sill, sill->far bowl) into gentle
-# curves. The flat gauge regions (shelf, valley floor, sill top, far bowl) are
-# far wider than the kernel, so their interiors stay flat; only the corners
-# round. 4 m ~= two cells at dx = 2 m.
-SMOOTHING_M = 4.0
+POINT1_X_M = 150.0  # first depression centre (published gauge: (150, 50))
+CREST_X_M = 200.0  # obstruction crest between the depressions (z ~ 10.0)
+POINT2_X_M = 250.0  # second depression centre (published gauge: (250, 50))
 
-# Release: a block of still water standing on the reservoir shelf, released
-# at t = 0 (dam-break initial condition; no sources). Deep and narrow for a
-# punchy collapse (front celerity ~ 2*sqrt(g*h)), and sized so that even if
-# the whole release ponded in the valley, the static surface would top out
-# ~0.25 m below the sill crest — see the module docstring.
-RELEASE_DEPTH_M = 0.8
-T_END_S = 900.0  # release + settle; integer -> float32-exact stop
+# Manning's n per the spec: 0.01 uniform.
+MANNING_N = 0.01
+
+# Inflow adaptation: the published hydrograph is an upstream *boundary*
+# inflow; this solver has no open boundaries, so the discharge is injected
+# as a line of near-boundary volume sources hugging the x = 0 wall (equal
+# split, area-weighted within each circle). Volume sources carry no momentum
+# vector — the flood wave acquires all momentum on the 1:200 slope descent,
+# as in the published setup.
+INFLOW_X_M = 2.0
+INFLOW_RADIUS_M = 10.0
+INFLOW_CENTERS_Y_M = (10.0, 30.0, 50.0, 70.0, 90.0)
+# The hydrograph ramps are piecewise-linear with breakpoints on whole
+# seconds, so 1 s piecewise-constant phases sampled at midpoints integrate
+# the published curve exactly (total 1310 m^3).
+INFLOW_PHASE_S = 1.0
+
+T_END_S = 900.0  # spec: run to t = 15 min; integer -> float32-exact stop
 
 DT_MAX_DEFAULT = 2.0
 DT_INIT_DEFAULT = 1e-2
 CFL_INTERVAL_DEFAULT = 10
 
 # ── Correctness gates (invariant / qualitative; no closed-form reference) ───
-# Closed domain (reflective walls), zero sources: the release volume must be
-# conserved to float32 accumulation error. This is the anchor gate. The
-# dam-break bench holds 1e-5 over a 20 s frictionless run; this case runs
-# 900 s (~10k steps) of friction + wetting/drying and lands at ~1.7e-5
-# measured, so the gate is 5e-5 (same "round-off only" spirit, ~3x headroom).
+# Closed domain (reflective walls) + a volume-conserving source schedule: the
+# final volume must match the injected hydrograph volume to float32
+# accumulation error. This is the anchor gate. The dam-break bench holds 1e-5
+# over a 20 s frictionless run; this case runs 900 s (~10k steps) of
+# friction + wetting/drying, so the gate is 5e-5 (same "round-off only"
+# spirit, ~3x headroom over the release-variant's measured ~1.7e-5).
 GATE_VOLUME_DRIFT_REL = 5e-5
-# The valley (Point 1) must catch and retain a settled pond.
+# The first depression (Point 1) must catch and retain a settled pond.
 GATE_POINT1_PONDED_M = 0.05
 # Disconnected-reservoir signature: both pond *surfaces* must settle at least
-# this far below the obstruction crest elevation. The two bowls are then
-# hydraulically isolated (no continuous water body spans the crest), so any
-# water in the far bowl must have been carried *over* the crest by the bore.
-# NB the crest gauge itself retains a thin residual film/puddle — an inherent
-# SWE wetting/drying artifact at this resolution — so dryness is asserted via
-# water-surface elevation, not the crest cell's raw depth.
-GATE_PONDS_BELOW_CREST_M = 0.10
-# Momentum signature: Point 2 (far bowl, past the dry crest) must hold at
-# least this depth at t_end. The release's static ceiling in the valley is
-# ~0.25 m below the crest, so an inertia-free model cannot cross; only
-# conserved momentum puts water here.
+# this far below the obstruction crest elevation. The two depressions are
+# then hydraulically isolated (no continuous water body spans the crest), so
+# any water in the second must have been carried *over* the crest by the
+# bore. NB the crest gauge itself retains a thin residual film/puddle — an
+# inherent SWE wetting/drying artifact at this resolution — so dryness is
+# asserted via water-surface elevation, not the crest cell's raw depth. The
+# published dataset fills the first depression to the brim by design (inflow
+# 1310 m^3 vs ~1309 m^3 capacity below the crest), so Point 1 settles below
+# the crest only by the volume that overtopped (~9 mm measured on
+# gpu_resident_batch); the margin must sit below that design freeboard
+# (5 mm ~= 1.7x headroom).
+GATE_PONDS_BELOW_CREST_M = 0.005
+# Momentum signature: Point 2 (second depression, past the dry crest) must
+# hold at least this depth at t_end. An inertia-free model can at best fill
+# the first depression flush with the crest and stop; only conserved
+# momentum puts water here.
 GATE_POINT2_MIN_DEPTH_M = 0.02
-# Still-water control: the same volume placed *at rest* in the valley (the
-# deepest lake any inertia-free, gradient-driven transport could build
-# against the sill) must leave Point 2 essentially dry. If the control wets
-# Point 2, water is crossing the crest without momentum — a numerical
-# well-balance leak — and the release run's Point 2 pond proves nothing.
-# This control is what makes the momentum gate meaningful.
+# Still-water control: the same volume placed *at rest* in the first
+# depression, filled to the crest (the deepest lake any inertia-free,
+# gradient-driven transport could build) must leave Point 2 essentially dry.
+# If the control wets Point 2, water is crossing the crest without momentum
+# — a numerical well-balance leak — and the inflow run's Point 2 pond proves
+# nothing. This control is what makes the momentum gate meaningful.
 GATE_CONTROL_POINT2_MAX_M = 0.005
 # Repeat-to-repeat reproducibility (relative to peak depth). GPU atomicAdd flux
 # scatter is not bit-reproducible; the device-side CFL reductions accumulate a
@@ -188,7 +186,7 @@ GIF_VMAX_M = 0.8
 
 @dataclass(frozen=True)
 class ObstructionSpec:
-    """Geometry + release parameters for the momentum-obstruction case."""
+    """Geometry + dataset parameters for the momentum-obstruction case."""
 
     name: str
     nx: int
@@ -196,10 +194,10 @@ class ObstructionSpec:
     channel_len_m: float
     channel_width_m: float
     manning_n: float
-    release_depth_m: float
     t_end_s: float
     dt_max: float
     cfl_interval: int
+    dataset_dir: Path
 
     @property
     def dx_m(self) -> float:
@@ -210,16 +208,12 @@ class ObstructionSpec:
         return self.channel_width_m / self.ny
 
     @property
-    def control_x(self) -> tuple[float, ...]:
-        return CONTROL_X
+    def dem_path(self) -> Path:
+        return self.dataset_dir / DEM_FILENAME
 
     @property
-    def control_z(self) -> tuple[float, ...]:
-        return CONTROL_Z
-
-    @property
-    def crest_z_m(self) -> float:
-        return CREST_Z_M
+    def bc_path(self) -> Path:
+        return self.dataset_dir / BC_FILENAME
 
     @property
     def point1_xy(self) -> tuple[float, float]:
@@ -228,10 +222,6 @@ class ObstructionSpec:
     @property
     def point2_xy(self) -> tuple[float, float]:
         return (POINT2_X_M, self.channel_width_m / 2.0)
-
-    @property
-    def reservoir_span_m(self) -> tuple[float, float]:
-        return (RESERVOIR_X0_M, RESERVOIR_X1_M)
 
 
 @dataclass(frozen=True)
@@ -242,6 +232,7 @@ class CaseMetrics:
     backend: str
     volume_drift_rel: float
     min_depth_m: float
+    crest_z_m: float
     point1_depth_m: float
     point1_wse_m: float
     crest_depth_m: float
@@ -280,10 +271,73 @@ def _build_spec(args: argparse.Namespace) -> ObstructionSpec:
         channel_len_m=CHANNEL_LEN_M,
         channel_width_m=CHANNEL_WIDTH_M,
         manning_n=MANNING_N,
-        release_depth_m=args.release_depth,
         t_end_s=args.t_end,
         dt_max=args.dt_max,
         cfl_interval=args.cfl_interval,
+        dataset_dir=Path(args.dataset_dir),
+    )
+
+
+def _load_dem_profile(dem_path: Path) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Parse the ESRI ASCII DEM; return (cell-center x, bed z) of the profile.
+
+    The published raster is prismatic (every row identical), which the
+    harness relies on for the 1-D hypsometry and side-profile rendering —
+    verified here rather than assumed.
+    """
+    grid = load_ascii_grid(dem_path)
+    if not bool(np.isfinite(grid.z).all()):
+        raise ValueError("DEM contains nodata cells")
+    if not bool(np.all(grid.z == grid.z[0])):
+        raise ValueError("DEM is not prismatic (rows differ)")
+    return grid.x, grid.z[0].copy()
+
+
+def _load_hydrograph(bc_path: Path) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Parse the inflow hydrograph CSV; return (time [s], discharge [m^3/s])."""
+    data = np.loadtxt(bc_path, delimiter=",", skiprows=1, dtype=np.float64, ndmin=2)
+    t, q = data[:, 0], data[:, 1]
+    if bool(np.any(np.diff(t) <= 0.0)):
+        raise ValueError("hydrograph times must be strictly increasing")
+    if bool(np.any(q < 0.0)) or q[-1] != 0.0:
+        raise ValueError("hydrograph must be non-negative and end at zero inflow")
+    return t, q
+
+
+def _inflow_sources(discharge_m3s: float) -> list[PointSource]:
+    """The upstream line inflow as equal-split near-boundary volume sources."""
+    per_source = discharge_m3s / len(INFLOW_CENTERS_Y_M)
+    return [PointSource(per_source, (INFLOW_X_M, y), INFLOW_RADIUS_M) for y in INFLOW_CENTERS_Y_M]
+
+
+def _hydrograph_phases(spec: ObstructionSpec) -> list[SimulationPhase]:
+    """Published hydrograph as 1 s piecewise-constant phases + settle tail.
+
+    Midpoint sampling of the piecewise-linear curve is volume-exact because
+    the CSV breakpoints land on whole seconds (no phase straddles a kink).
+    """
+    t, q = _load_hydrograph(spec.bc_path)
+    active_end_s = float(t[int(np.flatnonzero(q > 0.0).max()) + 1])
+    n_active = round(active_end_s / INFLOW_PHASE_S)
+    phases: list[SimulationPhase] = []
+    for k in range(n_active):
+        t_mid = (k + 0.5) * INFLOW_PHASE_S
+        q_k = float(np.interp(t_mid, t, q))
+        sources = _inflow_sources(q_k) if q_k > 0.0 else []
+        phases.append(SimulationPhase(duration_s=INFLOW_PHASE_S, sources=sources))
+    settle_s = spec.t_end_s - n_active * INFLOW_PHASE_S
+    if settle_s < 0.0:
+        raise ValueError(f"t_end {spec.t_end_s} shorter than the hydrograph ({active_end_s} s)")
+    phases.append(SimulationPhase(duration_s=settle_s, sources=[]))
+    return phases
+
+
+def _injected_volume(spec: ObstructionSpec) -> float:
+    """Total hydrograph volume [m^3] as the phase schedule integrates it."""
+    return float(
+        sum(
+            p.duration_s * sum(s.discharge_m3s for s in p.sources) for p in _hydrograph_phases(spec)
+        )
     )
 
 
@@ -298,73 +352,66 @@ def _original_cell_centroids(
     return cx.astype(np.float64), cy.astype(np.float64)
 
 
+def _bed_original(spec: ObstructionSpec) -> NDArray[np.float64]:
+    """Bed elevation at cell centers in original (generation) order."""
+    dem_x, dem_z = _load_dem_profile(spec.dem_path)
+    cx, _cy = _original_cell_centroids(spec)
+    if cx.min() < dem_x[0] or cx.max() > dem_x[-1]:
+        raise ValueError("mesh extends beyond the DEM coverage")
+    return np.interp(cx, dem_x, dem_z)
+
+
+def _crest_z(spec: ObstructionSpec) -> float:
+    """Obstruction crest elevation: bed maximum between the two gauges."""
+    cx, _cy = _original_cell_centroids(spec)
+    zb = _bed_original(spec)
+    between = (cx > POINT1_X_M) & (cx < POINT2_X_M)
+    return float(zb[between].max())
+
+
 def _ensure_mesh(spec: ObstructionSpec, output_dir: Path) -> Path:
-    """Write the synthetic obstruction mesh (idempotent per resolution + bed rev)."""
-    # "v2" = elevated-release bed; bump when CONTROL_X/CONTROL_Z change so a
-    # stale cached parquet from an older bed is never silently reused.
-    mesh_path = output_dir / f"obstruction-v3-{spec.nx}x{spec.ny}.parquet"
+    """Write the DEM-sampled mesh over the modelled area (idempotent)."""
+    # "dem2010" = published May-2010 raster; bump if the sampling changes so
+    # a stale cached parquet from an older bed is never silently reused.
+    mesh_path = output_dir / f"obstruction-dem2010-{spec.nx}x{spec.ny}.parquet"
     if not mesh_path.exists():
         verts, quads = build_channel_mesh(
             spec.nx, spec.ny, spec.channel_len_m, spec.channel_width_m
         )
-        cx, _cy = _original_cell_centroids(spec)
-        zb = sloping_obstruction_bed(
-            cx, control_x=spec.control_x, control_z=spec.control_z, smoothing_m=SMOOTHING_M
-        )
+        zb = _bed_original(spec).astype(np.float32)
         write_mesh_parquet(mesh_path, verts, quads, zb)
-        print(f"[mesh] synthetic obstruction mesh written: {mesh_path} (N={spec.nx * spec.ny})")
+        print(f"[mesh] DEM-sampled mesh written: {mesh_path} (N={spec.nx * spec.ny})")
     return mesh_path
 
 
-def _release_mask(spec: ObstructionSpec) -> NDArray[np.bool_]:
-    """Cells (original order) whose centroids lie under the release block."""
-    cx, _cy = _original_cell_centroids(spec)
-    x0, x1 = spec.reservoir_span_m
-    return (cx >= x0) & (cx < x1)
-
-
 def _initial_state(spec: ObstructionSpec) -> dict[str, object]:
-    """Still release block on the reservoir shelf, dry elsewhere (original order)."""
-    n = spec.nx * spec.ny
-    h0 = np.zeros(n, dtype=np.float32)
-    h0[_release_mask(spec)] = np.float32(spec.release_depth_m)
-    zeros = np.zeros(n, dtype=np.float32)
-    return {"h": h0, "hu": zeros.copy(), "hv": zeros.copy()}
-
-
-def _released_volume(spec: ObstructionSpec) -> float:
-    """Exact volume of the release block [m^3]."""
-    n_cells = int(_release_mask(spec).sum())
-    return float(n_cells) * spec.dx_m * spec.dy_m * spec.release_depth_m
-
-
-def _bed_original(spec: ObstructionSpec) -> NDArray[np.float64]:
-    """Bed elevation at cell centers in original (generation) order."""
-    cx, _cy = _original_cell_centroids(spec)
-    return sloping_obstruction_bed(
-        cx, control_x=spec.control_x, control_z=spec.control_z, smoothing_m=SMOOTHING_M
-    ).astype(np.float64)
+    """Dry-bed initial condition (per the spec) in original cell order."""
+    zeros = np.zeros(spec.nx * spec.ny, dtype=np.float32)
+    return {"h": zeros.copy(), "hu": zeros.copy(), "hv": zeros.copy()}
 
 
 def _control_wse(spec: ObstructionSpec) -> float:
-    """Valley water-surface elevation holding the whole release volume at rest.
+    """Water-surface elevation holding the control volume at rest in Point 1.
 
-    Solved by bisection on the valley hypsometry (cells below the crest,
-    left of the sill top). This is the static all-in-valley ceiling the
-    module docstring describes; by construction it sits below the crest.
+    Solved by bisection on the depression's hypsometry (cells below the
+    crest, left of the obstruction). The dataset sizes the inflow to *just*
+    fill the depression (1310 m^3 vs ~1309 m^3 capacity), so the control
+    volume is capped at the capacity and the surface tops out at the crest —
+    the deepest lake any gradient-driven transport could build.
     """
     cx, _cy = _original_cell_centroids(spec)
     zb = _bed_original(spec)
-    valley = (zb < spec.crest_z_m) & (cx < CREST_X_M)
+    crest = _crest_z(spec)
+    valley = (zb < crest) & (cx < CREST_X_M)
     cell_area = spec.dx_m * spec.dy_m
-    target = _released_volume(spec)
 
     def capacity(w: float) -> float:
         return float(np.clip(w - zb[valley], 0.0, None).sum() * cell_area)
 
-    lo, hi = float(zb[valley].min()), spec.crest_z_m
+    target = min(_injected_volume(spec), capacity(crest))
+    lo, hi = float(zb[valley].min()), crest
     if capacity(hi) <= target:
-        raise RuntimeError("release volume exceeds valley capacity below the crest")
+        return crest
     for _ in range(60):
         mid = 0.5 * (lo + hi)
         if capacity(mid) < target:
@@ -375,17 +422,18 @@ def _control_wse(spec: ObstructionSpec) -> float:
 
 
 def _control_initial_state(spec: ObstructionSpec) -> dict[str, object]:
-    """Inertia-free endpoint: the release volume already at rest in the valley.
+    """Inertia-free endpoint: the inflow volume already at rest in Point 1.
 
     This is the deepest lake any gradient-driven (diffusive-wave) transport
-    of the release could ever build against the sill. Started at rest, a
-    well-balanced solver must keep the sill and Point 2 dry; any water
+    of the inflow could ever build against the obstruction. Started at rest,
+    a well-balanced solver must keep the crest and Point 2 dry; any water
     appearing past the crest is a numerical well-balance leak, not momentum.
     """
     cx, _cy = _original_cell_centroids(spec)
     zb = _bed_original(spec)
     wse = _control_wse(spec)
-    valley = (zb < spec.crest_z_m) & (cx < CREST_X_M)
+    crest = _crest_z(spec)
+    valley = (zb < crest) & (cx < CREST_X_M)
     h0 = np.where(valley, np.clip(wse - zb, 0.0, None), 0.0).astype(np.float32)
     zeros = np.zeros(spec.nx * spec.ny, dtype=np.float32)
     return {"h": h0, "hu": zeros.copy(), "hv": zeros.copy()}
@@ -434,7 +482,12 @@ def _run_once(
         progress=progress,
         initial_state=initial_state,
     )
-    result = workflow.run([SimulationPhase(duration_s=spec.t_end_s, sources=[])])
+    phases = (
+        _hydrograph_phases(spec)
+        if initial_state is None
+        else [SimulationPhase(duration_s=spec.t_end_s, sources=[])]
+    )
+    result = workflow.run(phases)
     return workflow, result
 
 
@@ -463,20 +516,14 @@ def _evaluate_case(
     finite = bool(np.isfinite(h_final).all())
     min_depth = float(h_final.min()) if h_final.size else 0.0
 
-    # Drift is measured against the solver's own initial volume (geometric
-    # cell areas at float32), not the analytic block volume — mirrors
-    # bench/dambreak.py. The release block is defined by centroid x-range,
-    # identical in solver order.
-    cx_solver = workflow.geom.centroid[:, 0].astype(np.float64)
-    x0, x1 = spec.reservoir_span_m
-    h0_solver = np.where((cx_solver >= x0) & (cx_solver < x1), spec.release_depth_m, 0.0)
-    area64 = workflow.geom.area.astype(np.float64)
-    volume_initial = float((h0_solver * area64).sum())
+    # Mass balance: dry start + volume-conserving sources, so the final
+    # volume must equal the injected hydrograph volume (mirrors
+    # bench/floodplain_depressions.py).
+    injected = _injected_volume(spec)
     volume_drift_rel = (
-        abs(result.volume_final_m3 - volume_initial) / volume_initial
-        if volume_initial > 0.0
-        else float("inf")
+        abs(result.volume_final_m3 - injected) / injected if injected > 0.0 else float("inf")
     )
+    crest_z = _crest_z(spec)
 
     c1 = _nearest_cell(workflow, spec.point1_xy)
     cc = _nearest_cell(workflow, (CREST_X_M, spec.channel_width_m / 2.0))
@@ -489,7 +536,7 @@ def _evaluate_case(
 
     left_ponded = point1_depth >= GATE_POINT1_PONDED_M
     # Disconnected reservoirs: both pond surfaces settle below the crest.
-    ponds_disconnected = max(point1_wse, point2_wse) <= CREST_Z_M - GATE_PONDS_BELOW_CREST_M
+    ponds_disconnected = max(point1_wse, point2_wse) <= crest_z - GATE_PONDS_BELOW_CREST_M
     point2_risen = point2_depth >= GATE_POINT2_MIN_DEPTH_M
     control_dry = control_point2_depth_m <= GATE_CONTROL_POINT2_MAX_M
 
@@ -502,12 +549,12 @@ def _evaluate_case(
         fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
     if not left_ponded:
         fail_reasons.append(
-            f"point1_depth:{point1_depth:.3f}<{GATE_POINT1_PONDED_M} (valley not ponded)"
+            f"point1_depth:{point1_depth:.3f}<{GATE_POINT1_PONDED_M} (depression not ponded)"
         )
     if not ponds_disconnected:
         max_wse = max(point1_wse, point2_wse)
         fail_reasons.append(
-            f"max_pond_wse:{max_wse:.3f}>{CREST_Z_M - GATE_PONDS_BELOW_CREST_M:.3f} "
+            f"max_pond_wse:{max_wse:.3f}>{crest_z - GATE_PONDS_BELOW_CREST_M:.3f} "
             f"(ponds not disconnected below crest)"
         )
     if not point2_risen:
@@ -526,6 +573,7 @@ def _evaluate_case(
         backend=backend,
         volume_drift_rel=volume_drift_rel,
         min_depth_m=min_depth,
+        crest_z_m=crest_z,
         point1_depth_m=point1_depth,
         point1_wse_m=point1_wse,
         crest_depth_m=crest_depth,
@@ -649,18 +697,23 @@ def _run_group(
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
         )
+        # The solver snapshots every phase boundary too, so the one-second
+        # hydrograph phases would otherwise crowd the start of the run.
+        gif_snapshots, gif_times = resample_snapshots_uniform(
+            gif_result.snapshots, gif_result.snap_times, safe_frames
+        )
         save_depth_gif(
             gif_workflow,
-            gif_result.snapshots,
-            gif_result.snap_times,
+            gif_snapshots,
+            gif_times,
             Path(args.output_dir) / f"{spec.name}-{backend}-2d.gif",
             vmax=GIF_VMAX_M,
             title_prefix=f"{spec.name} — ",
         )
         save_profile_gif(
             gif_workflow,
-            gif_result.snapshots,
-            gif_result.snap_times,
+            gif_snapshots,
+            gif_times,
             Path(args.output_dir) / f"{spec.name}-{backend}-side.gif",
             vmax=GIF_VMAX_M,
             title_prefix=f"{spec.name} — ",
@@ -692,7 +745,7 @@ def _print_report(all_metrics: list[CaseMetrics], all_perf: list[PerfMetrics]) -
             print(f"  !! {reason}")
         print(
             f"  Point 1 WSE {m.point1_wse_m:.3f} m, Point 2 WSE {m.point2_wse_m:.3f} m "
-            f"(crest {CREST_Z_M:.2f} m)"
+            f"(crest {m.crest_z_m:.3f} m)"
         )
     print()
     print(
@@ -723,7 +776,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ny", type=int, default=NY_DEFAULT)
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
-    parser.add_argument("--release-depth", type=float, default=RELEASE_DEPTH_M)
+    parser.add_argument(
+        "--dataset-dir",
+        default=str(DEFAULT_DATASET_DIR),
+        help="directory holding test3DEM.asc and Test3BC.csv (published EA dataset)",
+    )
     parser.add_argument("--t-end", type=float, default=T_END_S)
     parser.add_argument(
         "--output-interval-s",
@@ -759,10 +816,11 @@ def main() -> int:
 
     spec = _build_spec(args)
     mesh_path = _ensure_mesh(spec, output_dir)
+    t_bc, q_bc = _load_hydrograph(spec.bc_path)
     print(
-        f"[release] {spec.release_depth_m} m block on the shelf "
-        f"(x in {spec.reservoir_span_m}, z = {SHELF_Z_M} m), volume "
-        f"{_released_volume(spec):.0f} m^3; t_end {spec.t_end_s:.0f} s"
+        f"[inflow] published hydrograph {spec.bc_path.name}: peak {q_bc.max():.1f} m^3/s, "
+        f"active {t_bc[int(np.flatnonzero(q_bc > 0.0).max()) + 1]:.0f} s, total "
+        f"{_injected_volume(spec):.0f} m^3; t_end {spec.t_end_s:.0f} s"
     )
 
     all_metrics: list[CaseMetrics] = []
@@ -783,7 +841,7 @@ def main() -> int:
             "control_point2_max_m": GATE_CONTROL_POINT2_MAX_M,
             "determinism_rel": GATE_DETERMINISM_REL,
         },
-        "released_volume_m3": _released_volume(spec),
+        "injected_volume_m3": _injected_volume(spec),
         "correctness": [asdict(m) for m in all_metrics],
         "performance": [asdict(p) for p in all_perf],
     }

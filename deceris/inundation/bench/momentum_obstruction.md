@@ -10,51 +10,47 @@ conservation over a small obstruction**. Harness:
 
 Whether the solver preserves the shallow-water **momentum (inertia) terms**
 during a fast transient — the physics a diffusive-wave or over-dissipative
-scheme drops. A block of still water is released from an elevated shelf
-(dam-break initial condition), accelerates down a slope, crosses a deep
-valley as a bore, and runs up and *over* a flat-topped sill (the
-obstruction) into a far bowl. The release is sized so that even if all of
-it ponded in the valley, the static surface would stay ≈ 0.27 m **below**
-the crest — so an inertia-free model (which moves water strictly down
-surface gradients) can never cross, and any pond past the obstruction is
-an unambiguous momentum signature.
+scheme drops. The case runs the **published May-2010 dataset**
+(`Benchmarking_Model_Data/Test3 dataset 2010`): the georeferenced ASCII DEM
+(`test3DEM.asc`, prismatic 1:200 slope with two depressions separated by an
+obstruction) and the upstream inflow hydrograph (`Test3BC.csv`, 65.5 m³/s
+plateau, 1310 m³ total). The flood wave travels down the slope and arrives
+at the first depression as a fast bore. By design the inflow volume is
+*just sufficient* to fill the first depression to the obstruction crest —
+an inertia-free model (which moves water strictly down surface gradients)
+at best fills it and stops, so any pond past the obstruction is an
+unambiguous momentum signature.
 
-### Closed-domain adaptation
+### Adaptation
 
-The published EA Test 3 uses a sloping channel with an **open downstream
-outlet**. This solver has only reflective walls and volume-conserving
-sources (no outflow, no injected momentum vector), so the case is recast
-as a finite elevated release in a closed trap. Containment is the closed
-mesh boundary itself — the bed has no built walls, whose steep dry faces
-provoke spurious numerical run-up. An earlier variant that injected a
-surge directly into a bowl beside the sill was retired: its injected
-volume nearly matched the bowl's capacity below the crest, so a static
-fill alone reached within 2 cm of the crest and the case did not
-discriminate momentum. See the
+The published inflow is an upstream *boundary* condition; this solver has
+no open boundaries, so the hydrograph is injected as a line of
+near-boundary **volume sources** hugging the x = 0 wall (1 s
+piecewise-constant phases, volume-exact). Volume sources carry no momentum
+vector — the wave acquires all momentum on the slope descent, exactly as in
+the published setup — and all other boundaries are closed per the spec
+(this solver's walls are reflective). An earlier synthetic variant that
+injected a surge directly into a bowl beside the sill was retired: it did
+not discriminate momentum. See the
 [effort plan](../../../docs/implementation/16-momentum-obstruction/plan.md)
 and [decisions.md](../../../docs/planning/decisions.md).
 
-No closed form exists (model-_intercomparison_ benchmark) and there is no
-external DEM (repo convention is synthetic meshes), so the prismatic bed is
-generated analytically (`bench/common.sloping_obstruction_bed`). Its
-piecewise-linear slope breaks are Gaussian-smoothed (σ = 4 m) into gentle
-curves so the shelf, valley floor, sill flanks, and far bowl blend without
-sharp corners; the wide flat gauge regions stay flat in their interior. Gates
-are therefore invariant/qualitative, not an error norm.
+No closed form exists (model-_intercomparison_ benchmark), so gates are
+invariant/qualitative, not an error norm.
 
 ## Setup
 
 | Parameter            | Default                          | Meaning                       |
 | -------------------- | -------------------------------- | ----------------------------- |
-| Domain               | 300 m × 60 m                     | closed (reflective) boundary  |
-| Grid                 | 150 × 12                         | `--nx` / `--ny` (dx = 2 m)    |
-| Bed                  | shelf z = 1.2, valley/far bowl z = −0.6, sill z = 0 | prismatic  |
-| Release block        | x ∈ [0, 30] on the shelf, 0.8 m deep (1440 m³) | `--release-depth` |
-| Valley (Point 1)     | gauge x = 127                    | catches the bulk of the bore  |
-| Sill / obstruction   | crest z = 0, gauge x = 190       | barrier to cross              |
-| Far bowl (Point 2)   | gauge x = 250                    | momentum target               |
-| Manning `n`          | 0.03                             | channel roughness             |
-| `t_end`              | 900 s (float32-exact)            | `--t-end` (release + settle)  |
+| Domain               | 300 m × 100 m (per spec)         | closed (reflective) boundary  |
+| Grid                 | 150 × 50                         | `--nx` / `--ny` (dx = 2 m, native DEM) |
+| Bed                  | `test3DEM.asc` (prismatic; troughs 9.75 at x = 150/250, crest ~10.0 at x ≈ 200) | `--dataset-dir` |
+| Inflow               | `Test3BC.csv`: 0→65.5 m³/s (5–15 s), hold to 25 s, back to 0 by 35 s; 1310 m³ | near-boundary volume sources |
+| Point 1              | gauge (150, 50) per spec         | first depression              |
+| Obstruction          | crest ≈ 10.0 between the gauges  | barrier to cross              |
+| Point 2              | gauge (250, 50) per spec         | momentum target               |
+| Manning `n`          | 0.01 uniform (per spec)          | roughness                     |
+| `t_end`              | 900 s per spec (float32-exact)   | `--t-end` (inflow + settle)   |
 | `dt_max` / `dt_init` | 2.0 s / 1e-2 s                   | timestep bounds               |
 | `cfl_interval`       | 10                               | steps per CFL recompute       |
 
@@ -62,28 +58,30 @@ are therefore invariant/qualitative, not an error norm.
 
 | Gate                        | Threshold      | Notes                                            |
 | --------------------------- | -------------- | ------------------------------------------------ |
-| `GATE_VOLUME_DRIFT_REL`     | 5e-5           | final volume vs release (closed, zero sources)   |
+| `GATE_VOLUME_DRIFT_REL`     | 5e-5           | final volume vs injected hydrograph volume       |
 | positivity + finite         | min depth ≥ 0  | wetting/drying stability                         |
-| `GATE_POINT1_PONDED_M`      | 0.05 m         | valley retains a settled pond                    |
-| `GATE_PONDS_BELOW_CREST_M`  | 0.10 m         | both pond surfaces below the crest (disconnected)|
-| `GATE_POINT2_MIN_DEPTH_M`   | 0.02 m         | momentum signature: far bowl ponded              |
-| `GATE_CONTROL_POINT2_MAX_M` | 0.005 m        | still-water control leaves the far bowl dry      |
+| `GATE_POINT1_PONDED_M`      | 0.05 m         | first depression retains a settled pond          |
+| `GATE_PONDS_BELOW_CREST_M`  | 0.005 m        | both pond surfaces below the crest (disconnected)|
+| `GATE_POINT2_MIN_DEPTH_M`   | 0.02 m         | momentum signature: second depression ponded     |
+| `GATE_CONTROL_POINT2_MAX_M` | 0.005 m        | still-water control leaves Point 2 dry           |
 | `GATE_DETERMINISM_REL`      | 2e-3           | run-to-run reproducibility                       |
 
-Volume drift is the anchor gate (closed domain, zero sources). Every
-backend is paired with an untimed **still-water control**: the release
-volume placed at rest in the valley at its static ceiling (the deepest
-lake inertia-free transport could build against the sill). Only if the
-control leaves Point 2 dry can release-run ponding be attributed to
+Mass balance is the anchor gate (closed walls + volume-conserving
+sources). Every backend is paired with an untimed **still-water control**:
+the inflow volume placed at rest in the first depression, filled to the
+crest (the deepest lake inertia-free transport could build — the dataset
+sizes the inflow to the depression's capacity by design, so Point 1's
+settled surface ends only ~9 mm below the crest and the disconnection
+margin is accordingly 5 mm). Only if the
+control leaves Point 2 dry can inflow-run ponding be attributed to
 momentum — on the current solver the control leaks over the crest from
 rest (the known deferred Audusse well-balance gap), so the case honestly
 FAILs with a `well_balance_leak` reason until that scheme change lands.
 Dryness of the obstruction is asserted via **water-surface elevation**
 (both ponds below the crest), not the crest cell's raw depth: at dx = 2 m
-the crest gauge retains a thin ~0.05 m residual film — an inherent SWE
-wetting/drying artifact — while the meaningful ponds settle ~0.5 m below
-the crest. Determinism is tolerance-based, not bit-exact (see the
-`atomicAdd` note in [dambreak.md](dambreak.md)).
+the crest gauge retains a thin residual film — an inherent SWE
+wetting/drying artifact. Determinism is tolerance-based, not bit-exact
+(see the `atomicAdd` note in [dambreak.md](dambreak.md)).
 
 ## Backends
 
@@ -106,14 +104,17 @@ just benchmark-obstruction --backends gpu_resident_batch,fixed_dt_batch_barrier
 
 `--repeats >= 2` enables the determinism check; `--warmup` runs are excluded
 from timing. The animation comes from a single _untimed_ extra run, so perf
-numbers stay clean.
+numbers stay clean. Frames are resampled onto uniform simulated time before
+rendering: the solver emits a snapshot at every phase boundary, so the
+one-second hydrograph phases would otherwise crowd the start of the run and
+make playback lurch when the inflow stops.
 
 ### Key flags
 
 - `--backends` — CSV of solver impls (see above).
 - `--nx` / `--ny` — grid resolution.
 - `--dt-max` / `--cfl-interval` — timestep controls.
-- `--release-depth` / `--t-end` — release-block depth and end time.
+- `--dataset-dir` / `--t-end` — dataset location and end time.
 - `--output-interval-s` — snapshot cadence for timed runs (default: one final
   snapshot).
 - `--gif` — top-down 2D terrain + depth-heatmap animation.
