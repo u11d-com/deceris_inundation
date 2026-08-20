@@ -21,16 +21,27 @@ int32 CSR offsets fail explicitly before overflow.
 Long-horizon simulated time must use float64 or integer representation. Float32
 resolution becomes too coarse for ordinary timesteps at production horizons.
 
+## Momentum state
+
+Initial depth and both momentum components are preserved across workflow
+preparation and phase resets. Final momentum downloads are part of the retained
+warm-start and velocity-scoring contract.
+
 ## Momentum-obstruction benchmark
 
-The published open-outlet case does not match reflective boundaries. The
-retained elevated-release case pairs every release with a still-water control;
+The elevated-release case pairs every release with a still-water control;
 control leakage is never credited as momentum.
 
 ## Hydrostatic interface correction
 
 The Audusse source correction is part of both Vulkan GLSL flux variants. Each
 cell uses its own actual and reconstructed depth along its own outward normal.
-This reduces lake-at-rest velocity from roughly 0.3–0.5 m/s to below 1e-4 m/s
-and removes the obstruction control leak. See
-`../implementation/17-audusse-well-balance-correction/results.md`.
+This reduces lake-at-rest velocity from roughly 0.3–0.5 m/s to below 1e-4 m/s.
+
+## Float32 mass floor
+
+Flood-propagation drift worsened under timestep and grid refinement and then
+saturated. This is consistent with small `dt * dh` increments being absorbed
+by float32 state, but remains a hypothesis until a float64 state comparison.
+The 1e-3 mass gate applies only to the measured Test 4 configuration. See
+`../implementation/18-flood-propagation/results.md`.
