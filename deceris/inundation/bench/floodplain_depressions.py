@@ -1,23 +1,39 @@
-"""EA Test 2 benchmark: filling of floodplain depressions (flattened egg box).
+"""EA Test 2 benchmark: filling of floodplain depressions.
 
-A synthetic reconstruction of the UK Environment Agency "Benchmarking of 2D
-Hydraulic Modelling Packages" Test 2. A 2000 m x 2000 m floodplain with a
-"flattened egg box" topography -- a flat plateau carved with a 4 x 4 grid of
-16 shallow circular depressions -- is flooded by an inflow hydrograph applied
-at the top-left corner (peak 20 m³/s, ~85 min time base). The test exercises
-disconnected water bodies, wetting/drying of floodplains, and low-momentum
-inundation extent, with the emphasis on the *final* distribution of ponded
-water rather than peak levels.
+Runs the UK Environment Agency "Benchmarking of 2D Hydraulic Modelling
+Packages" Test 2 from the published May-2010 dataset
+(``Benchmarking_Model_Data/Test2 dataset 2010``): the georeferenced 2 m
+ASCII DEM (``test2DEM.asc`` — a 2000 m x 2000 m "flattened egg box" of 16
+~0.5 m depressions on a plane falling ~2 m along the NW→SE diagonal), the
+inflow hydrograph (``Test2_BC.csv``, peak 20 m^3/s over an ~85 min base,
+97 200 m^3 total) and the 16 published output points (``Test2output.csv``,
+one at the centre of each depression). Per the spec: modelled area
+x, y in [0, 2000] m (``Test2ActiveArea_region``), 20 m model resolution
+(~10 000 nodes), Manning n = 0.03 uniform, dry-bed initial condition, run
+to t = 48 h so the inundation settles to its final state.
 
-Unlike the Tier 1 dam-break cases, EA Test 2 has no closed-form solution — it
-is a model-*intercomparison* benchmark. There is also no external DEM file
-(the repo convention is synthetic, self-contained meshes), so the egg-box bed
-is generated analytically (`bench/common.eggbox_bed`) with a gentle NE rise
-that makes the top-right depressions structurally the highest ground. The
-acceptance criteria are therefore invariant/qualitative rather than an error
-norm against a reference: closed-domain mass balance, positivity / wetting-
-drying stability, disconnected ponding in the depressions, dry high ground
-between them, and the EA result that the far-corner points (15 & 16) stay dry.
+The physics under test: inundation extent and final ponded depth under
+*low-momentum* flow over complex topography. Water enters at the high (NW)
+corner, runs downhill, fills the first depression to its sill, spills into
+the next, and so on until the hydrograph volume is exhausted — the answer
+|
+That endpoint is *not* a simple fill-and-spill cascade. Conveying the 20 m^3/s
+peak over a saddle needs ~0.24 m  of head (broad-crested weir, ~100 m crest)
+while the competing saddles around a depression differ by only ~0.04 m, so
+while the hydrograph runs the water spreads on a broad front and strands
+itself across many depressions at once — which of them fill is genuinely
+path-dependent. What is *not* path-dependent is the terrain: a settled pond
+cannot stand above the sill it would spill over, and cannot exceed its
+basin's storage capacity. ``depression_basin`` (``bench/common.py``) computes
+both from the same bed the solver sees, and the gates are built on those
+bounds plus the closed-domain mass balance.
+
+One adaptation: this solver has no open-boundary inflow, so the hydrograph
+is injected as near-boundary *volume* sources along the published inflow
+line (``Test2BC_polyline``: the 100 m stretch of the western boundary
+running south from the NW corner). Volume sources carry no momentum vector,
+which is conservative for a case whose published emphasis is the settled
+distribution rather than the peak wave.
 
 Backends are configurable via ``--backends``; the retained Vulkan family runs
 on macOS/MoltenVK. The inflow is applied as a piecewise-constant per-phase
@@ -41,9 +57,11 @@ from typing import TYPE_CHECKING, Literal, cast
 import numpy as np
 
 from deceris.inundation.bench.common import (
+    block_average_grid,
     build_channel_mesh,
-    eggbox_bed,
-    eggbox_depression_centers,
+    depression_basin,
+    load_ascii_grid,
+    resample_snapshots_uniform,
     save_depth_gif,
     write_mesh_parquet,
 )
@@ -58,54 +76,80 @@ from deceris.inundation.workflow import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-# ── Case geometry / physics (defaults; see _build_parser for overrides) ─────
+# ── Case geometry / physics (published dataset; see _build_parser) ──────────
+# Dataset files (May-2010 EA benchmark distribution, checked into the repo).
+DEFAULT_DATASET_DIR = (
+    Path(__file__).resolve().parents[3] / "Benchmarking_Model_Data" / "Test2 dataset 2010"
+)
+DEM_FILENAME = "test2DEM.asc"
+BC_FILENAME = "Test2_BC.csv"
+GAUGES_FILENAME = "Test2output.csv"
+
+# Modelled area per Test2ActiveArea_region: a perfect 2000 m square with its
+# SW corner on the DEM origin (the raster carries a 200 m apron beyond it).
+# Mesh coordinates coincide with the DEM's georeference, so the published
+# output-point locations are used as-is. All boundaries are closed per the
+# spec; this solver's walls are reflective.
 DOMAIN_L_M = 2000.0
-N_PER_SIDE = 4  # 4 x 4 = 16 depressions
-NX_DEFAULT = 100
-NY_DEFAULT = 100  # dx = dy = 20 m
+NX_DEFAULT = 100  # dx = 20 m (spec: 20 m grid, ~10000 nodes)
+NY_DEFAULT = 100
 
-PLATEAU_Z_M = 0.0
-# Gentle rise toward the NE corner so the top-right depressions (EA output
-# points 15 & 16) are the highest ground and stay dry under a top-left inflow.
-NE_RISE_M = 1.0
-DEP_RADIUS_M = 100.0
-DEP_DEPTH_M = 0.5
-
-# EA Test 2 floodplain roughness (low-momentum overland flow).
+# EA Test 2 floodplain roughness per the spec: 0.03 uniform.
 MANNING_N = 0.03
 
-# Inflow hydrograph: symmetric triangle, peak 20 m^3/s over an ~85 min base,
-# applied at the top-left corner. Volume ~= 0.5 * peak * base ~= 51,000 m^3.
-INFLOW_PEAK_M3S = 20.0
-HYDROGRAPH_BASE_S = 85.0 * 60.0
-HYDROGRAPH_PHASES = 17
-SETTLE_S = 3600.0  # quiescent tail so ponds settle and the plateau drains
-# T_END = base + settle = 5100 + 3600 = 8700 s (integer -> float32-exact stop).
+# Inflow adaptation: the published boundary condition runs along the western
+# edge from the NW corner south to y = 1900 m (Test2BC_polyline). This solver
+# has no open boundaries, so the discharge enters as an equal split of
+# near-boundary volume sources on the first cell column over that stretch.
+INFLOW_X_M = 10.0
+INFLOW_Y_RANGE_M = (1900.0, 2000.0)
+INFLOW_RADIUS_M = 20.0
+INFLOW_SOURCES = 5
+# The hydrograph breakpoints land on whole minutes, so 60 s piecewise-constant
+# phases sampled at midpoints integrate the published piecewise-linear curve
+# exactly (spec: "linear interpolation should be used").
+INFLOW_PHASE_S = 60.0
+
+T_END_S = 48.0 * 3600.0  # spec: run to t = 48 h; integer -> float32-exact stop
 
 DT_MAX_DEFAULT = 5.0
 DT_INIT_DEFAULT = 1e-2
 CFL_INTERVAL_DEFAULT = 10
 
-# ── Correctness gates (invariant / qualitative; no closed-form reference) ───
-# Closed domain (reflective walls) started dry: every injected cubic metre is
-# retained, so final volume must equal injected volume to float32 accumulation
-# error. This is the anchor gate.
-GATE_MASS_BALANCE_REL = 5e-3
-# A depression is "ponded" if its center depth exceeds this at t_end.
+# ── Correctness gates ───────────────────────────────────────────────────────
+# Closed domain (reflective walls) started dry + a volume-conserving source
+# schedule: every injected cubic metre is retained, so the final volume must
+# equal the injected volume to float32 accumulation error. This is the anchor
+# gate; the run is ~4x longer than the EA Test 3 case (which holds 5e-5), so
+# the bound carries proportionate headroom.
+GATE_VOLUME_DRIFT_REL = 2e-4
+# A gauge counts as ponded above this depth — below it is residual film, not
+# inundation.
 POND_LEVEL_M = 0.05
-# Points 15 & 16 (far NE) must be effectively dry.
-DRY_LEVEL_M = 1e-3
-# At least this many of the 16 depressions must pond (disconnected bodies).
-GATE_MIN_PONDED = 3
-# A plateau cell (outside every depression) counts as wet above this depth.
-PLATEAU_WET_M = 0.05
-# Fraction of plateau cells allowed to be wet at t_end: low-momentum ponding
-# leaves the ridges between depressions dry.
-GATE_PLATEAU_WET_FRAC = 0.15
+# A settled pond cannot stand above the sill it would spill over. The pool
+# boundary is discretised, so equilibrium sits marginally above the discrete
+# sill (a sub-cell effect: one 20 m cell spans ~0.026 m of the local bed
+# gradient); this bound is comfortably inside that and still tight enough to
+# catch water climbing out of its basin.
+GATE_ABOVE_SILL_M = 0.03
+# Basins filled to their sill must together hold no more than was injected —
+# a conservation-derived bound on how much of the floodplain can fill.
+GATE_FULL_BASIN_CAPACITY_REL = 1.0
+# A basin counts as full when its surface is within this of its sill.
+FULL_BASIN_TOL_M = 0.02
+# Fraction of the injected volume that must have drained off the ridges into
+# the depressions by t_end. The remainder is film in transit on the slopes.
+GATE_PONDED_STORAGE_FRAC = 0.90
+# The eastern column of depressions (output points 13-16) must stay dry: the
+# injected volume is well below the storage capacity of the twelve
+# depressions in the three western columns, so it cannot fill through to
+# them. Anything appearing there is water stranded in transit.
+GATE_FAR_COLUMN_DRY_M = POND_LEVEL_M
 # Repeat-to-repeat reproducibility (relative to peak depth). GPU atomicAdd flux
-# scatter is not bit-reproducible; over the ~9k float32 steps of this run the
-# device-side CFL reductions accumulate to a run-to-run drift of ~1e-4.
-GATE_DETERMINISM_REL = 5e-4
+# scatter is not bit-reproducible, but the settled state is an attractor: with
+# the ponds at rest by t_end the drift damps out rather than accumulating over
+# the ~2e5 float32 steps, measuring 1.8e-6 on MoltenVK (~50x headroom here).
+GATE_DETERMINISM_REL = 1e-4
 
 DEFAULT_OUTPUT_ROOT = ".tmp/floodplain-depressions-bench"
 # gpu_resident_batch is the default Vulkan backend. The host-CFL-readback
@@ -122,69 +166,78 @@ AVAILABLE_BACKENDS: tuple[BackendImpl, ...] = (
     "gpu_resident_batch",
     "fixed_dt_batch",
 )
-GIF_FRAMES_DEFAULT = 60
+GIF_FRAMES_DEFAULT = 64
+GIF_VMAX_M = 0.6
 
 
 @dataclass(frozen=True)
 class DepressionSpec:
-    """Geometry + hydrograph parameters for the floodplain-depressions case."""
+    """Geometry + dataset parameters for the floodplain-depressions case."""
 
     name: str
     nx: int
     ny: int
     domain_l_m: float
-    n_per_side: int
-    plateau_z_m: float
-    ne_rise_m: float
-    dep_radius_m: float
-    dep_depth_m: float
     manning_n: float
-    inflow_peak_m3s: float
-    hydrograph_base_s: float
-    hydrograph_phases: int
-    settle_s: float
+    t_end_s: float
     dt_max: float
     cfl_interval: int
+    dataset_dir: Path
 
     @property
     def dx_m(self) -> float:
         return self.domain_l_m / self.nx
 
     @property
-    def t_end_s(self) -> float:
-        return self.hydrograph_base_s + self.settle_s
+    def dy_m(self) -> float:
+        return self.domain_l_m / self.ny
 
     @property
-    def n_depressions(self) -> int:
-        return self.n_per_side * self.n_per_side
+    def cell_area_m2(self) -> float:
+        return self.dx_m * self.dy_m
 
     @property
-    def inflow_center_m(self) -> tuple[float, float]:
-        # Top-left corner, offset a couple of cells off the walls.
-        off = 2.0 * self.dx_m
-        return (off, self.domain_l_m - off)
+    def dem_path(self) -> Path:
+        return self.dataset_dir / DEM_FILENAME
 
     @property
-    def inflow_radius_m(self) -> float:
-        return 2.0 * self.dx_m
+    def bc_path(self) -> Path:
+        return self.dataset_dir / BC_FILENAME
 
-    def depression_centers(self) -> NDArray[np.float64]:
-        return eggbox_depression_centers(self.domain_l_m, self.n_per_side)
+    @property
+    def gauges_path(self) -> Path:
+        return self.dataset_dir / GAUGES_FILENAME
+
+    @property
+    def inflow_centers_y_m(self) -> NDArray[np.float64]:
+        """Evenly spaced source centres along the published inflow line."""
+        lo, hi = INFLOW_Y_RANGE_M
+        return lo + (np.arange(INFLOW_SOURCES, dtype=np.float64) + 0.5) * (hi - lo) / INFLOW_SOURCES
+
+    @property
+    def inflow_cell(self) -> tuple[int, int]:
+        """(row, col) of the mesh cell at the centre of the inflow line."""
+        y_mid = 0.5 * (INFLOW_Y_RANGE_M[0] + INFLOW_Y_RANGE_M[1])
+        return (int(y_mid // self.dy_m), int(INFLOW_X_M // self.dx_m))
 
 
 @dataclass(frozen=True)
 class CaseMetrics:
-    """Invariant/qualitative metrics + gate outcomes for one (case, backend)."""
+    """Metrics + gate outcomes for one (case, backend) against the terrain bounds."""
 
     case: str
     backend: str
-    mass_balance_rel: float
+    volume_drift_rel: float
     min_depth_m: float
     ponded_count: int
-    dry_far_corner: bool
-    plateau_wet_frac: float
+    max_above_sill_m: float
+    full_basin_count: int
+    full_basin_capacity_rel: float
+    ponded_storage_frac: float
+    far_column_max_depth_m: float
     h_final_finite: bool
-    point_levels_m: list[float]
+    point_depths_m: list[float]
+    sill_depths_m: list[float]
     passed: bool
     fail_reasons: list[str] = field(default_factory=list[str])
 
@@ -210,84 +263,119 @@ def _build_spec(args: argparse.Namespace) -> DepressionSpec:
         nx=args.nx,
         ny=args.ny,
         domain_l_m=DOMAIN_L_M,
-        n_per_side=N_PER_SIDE,
-        plateau_z_m=PLATEAU_Z_M,
-        ne_rise_m=NE_RISE_M,
-        dep_radius_m=DEP_RADIUS_M,
-        dep_depth_m=DEP_DEPTH_M,
         manning_n=MANNING_N,
-        inflow_peak_m3s=args.inflow_peak,
-        hydrograph_base_s=args.hydro_base,
-        hydrograph_phases=HYDROGRAPH_PHASES,
-        settle_s=args.settle,
+        t_end_s=args.t_end,
         dt_max=args.dt_max,
         cfl_interval=args.cfl_interval,
+        dataset_dir=Path(args.dataset_dir),
     )
 
 
-def _original_cell_centroids(
-    spec: DepressionSpec,
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Cell centers in generation (pre-Hilbert) order, matching write order."""
-    n = spec.nx * spec.ny
-    dx = spec.dx_m
-    idx = np.arange(n)
-    cx = (idx % spec.nx + 0.5) * dx
-    cy = (idx // spec.nx + 0.5) * dx
-    return cx.astype(np.float64), cy.astype(np.float64)
+def _load_hydrograph(bc_path: Path) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Parse the inflow hydrograph CSV; return (time [s], discharge [m^3/s]).
+
+    The published table is in minutes; times come back in seconds.
+    """
+    data = np.loadtxt(bc_path, delimiter=",", skiprows=1, dtype=np.float64, ndmin=2)
+    t, q = data[:, 0] * 60.0, data[:, 1]
+    if bool(np.any(np.diff(t) <= 0.0)):
+        raise ValueError("hydrograph times must be strictly increasing")
+    if bool(np.any(q < 0.0)) or q[-1] != 0.0:
+        raise ValueError("hydrograph must be non-negative and end at zero inflow")
+    return t, q
 
 
-def _ensure_mesh(spec: DepressionSpec, output_dir: Path) -> Path:
-    """Write the synthetic egg-box mesh (idempotent per resolution)."""
-    mesh_path = output_dir / f"eggbox-{spec.nx}x{spec.ny}.parquet"
-    if not mesh_path.exists():
-        verts, quads = build_channel_mesh(spec.nx, spec.ny, spec.domain_l_m, spec.domain_l_m)
-        cx, cy = _original_cell_centroids(spec)
-        zb = eggbox_bed(
-            cx,
-            cy,
-            domain_l=spec.domain_l_m,
-            n_per_side=spec.n_per_side,
-            plateau_z=spec.plateau_z_m,
-            ne_rise_m=spec.ne_rise_m,
-            dep_radius_m=spec.dep_radius_m,
-            dep_depth_m=spec.dep_depth_m,
-        )
-        write_mesh_parquet(mesh_path, verts, quads, zb)
-        print(f"[mesh] synthetic egg-box mesh written: {mesh_path} (N={spec.nx * spec.ny})")
-    return mesh_path
+def _load_gauges(gauges_path: Path) -> NDArray[np.float64]:
+    """Published output-point coordinates, in file order (points 1..16)."""
+    data = np.loadtxt(gauges_path, delimiter=",", skiprows=1, dtype=np.float64, ndmin=2)
+    if not np.array_equal(data[:, 0], np.arange(1, data.shape[0] + 1, dtype=np.float64)):
+        raise ValueError("output points must be numbered 1..N in file order")
+    return data[:, 1:3].copy()
 
 
-def _initial_state(spec: DepressionSpec) -> dict[str, object]:
-    """Dry-bed initial condition (h = 0 everywhere) in original cell order."""
-    n = spec.nx * spec.ny
-    zeros = np.zeros(n, dtype=np.float32)
-    return {"h": zeros.copy(), "hu": zeros.copy(), "hv": zeros.copy()}
+def _inflow_sources(spec: DepressionSpec, discharge_m3s: float) -> list[PointSource]:
+    """The published inflow line as equal-split near-boundary volume sources."""
+    per_source = discharge_m3s / INFLOW_SOURCES
+    return [
+        PointSource(per_source, (INFLOW_X_M, float(y)), INFLOW_RADIUS_M)
+        for y in spec.inflow_centers_y_m
+    ]
 
 
 def _hydrograph_phases(spec: DepressionSpec) -> list[SimulationPhase]:
-    """Triangular inflow hydrograph as piecewise-constant phases + settle tail."""
-    base_s = spec.hydrograph_base_s
-    n = spec.hydrograph_phases
-    dt_ph = base_s / n
-    center = spec.inflow_center_m
-    radius = spec.inflow_radius_m
+    """Published hydrograph as 60 s piecewise-constant phases + settle tail.
+
+    Midpoint sampling of the piecewise-linear curve is volume-exact because
+    the CSV breakpoints land on whole minutes (no phase straddles a kink).
+    """
+    t, q = _load_hydrograph(spec.bc_path)
+    active_end_s = float(t[int(np.flatnonzero(q > 0.0).max()) + 1])
+    n_active = round(active_end_s / INFLOW_PHASE_S)
     phases: list[SimulationPhase] = []
-    for k in range(n):
-        t_mid = (k + 0.5) * dt_ph
-        frac = 1.0 - abs(2.0 * t_mid / base_s - 1.0)  # 0 -> 1 -> 0
-        q = spec.inflow_peak_m3s * frac
-        phases.append(SimulationPhase(duration_s=dt_ph, sources=[PointSource(q, center, radius)]))
-    phases.append(SimulationPhase(duration_s=spec.settle_s, sources=[]))
+    for k in range(n_active):
+        t_mid = (k + 0.5) * INFLOW_PHASE_S
+        q_k = float(np.interp(t_mid, t, q))
+        sources = _inflow_sources(spec, q_k) if q_k > 0.0 else []
+        phases.append(SimulationPhase(duration_s=INFLOW_PHASE_S, sources=sources))
+    settle_s = spec.t_end_s - n_active * INFLOW_PHASE_S
+    if settle_s < 0.0:
+        raise ValueError(f"t_end {spec.t_end_s} shorter than the hydrograph ({active_end_s} s)")
+    phases.append(SimulationPhase(duration_s=settle_s, sources=[]))
     return phases
 
 
 def _injected_volume(spec: DepressionSpec) -> float:
+    """Total hydrograph volume [m^3] as the phase schedule integrates it."""
     return float(
         sum(
             p.duration_s * sum(s.discharge_m3s for s in p.sources) for p in _hydrograph_phases(spec)
         )
     )
+
+
+def _bed_grid(spec: DepressionSpec) -> NDArray[np.float64]:
+    """Cell-average bed elevation over the modelled area, shaped (ny, nx).
+
+    Row-major with ``y`` ascending, so ``.ravel()`` is the mesh's original
+    (pre-Hilbert) cell order.
+    """
+    grid = load_ascii_grid(spec.dem_path)
+    return block_average_grid(
+        grid,
+        x_edges=np.linspace(0.0, spec.domain_l_m, spec.nx + 1),
+        y_edges=np.linspace(0.0, spec.domain_l_m, spec.ny + 1),
+    )
+
+
+def _gauge_basins(
+    spec: DepressionSpec, zb: NDArray[np.float64], gauges: NDArray[np.float64]
+) -> list[tuple[float, NDArray[np.int64], float]]:
+    """(sill elevation, pool cells, capacity) of the depression at each gauge."""
+    return [
+        depression_basin(
+            zb, (int(gy // spec.dy_m), int(gx // spec.dx_m)), cell_area=spec.cell_area_m2
+        )
+        for gx, gy in gauges
+    ]
+
+
+def _ensure_mesh(spec: DepressionSpec, output_dir: Path) -> Path:
+    """Write the DEM-sampled mesh over the modelled area (idempotent)."""
+    # "dem2010" = published May-2010 raster; bump if the sampling changes so
+    # a stale cached parquet from an older bed is never silently reused.
+    mesh_path = output_dir / f"eggbox-dem2010-{spec.nx}x{spec.ny}.parquet"
+    if not mesh_path.exists():
+        verts, quads = build_channel_mesh(spec.nx, spec.ny, spec.domain_l_m, spec.domain_l_m)
+        zb = _bed_grid(spec).ravel().astype(np.float32)
+        write_mesh_parquet(mesh_path, verts, quads, zb)
+        print(f"[mesh] DEM-sampled mesh written: {mesh_path} (N={spec.nx * spec.ny})")
+    return mesh_path
+
+
+def _initial_state(spec: DepressionSpec) -> dict[str, object]:
+    """Dry-bed initial condition (per the spec) in original cell order."""
+    zeros = np.zeros(spec.nx * spec.ny, dtype=np.float32)
+    return {"h": zeros.copy(), "hu": zeros.copy(), "hv": zeros.copy()}
 
 
 def _make_workflow(
@@ -330,23 +418,31 @@ def _run_once(
     return workflow, result
 
 
-def _depression_masks(
-    workflow: SWEWorkflow, spec: DepressionSpec
-) -> tuple[NDArray[np.int64], NDArray[np.bool_]]:
-    """Nearest solver cell per depression center + a plateau (outside-all) mask."""
+def _gauge_cells(workflow: SWEWorkflow, gauges: NDArray[np.float64]) -> NDArray[np.int64]:
+    """Solver cell nearest each published output point."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
     cx = workflow.geom.centroid[:, 0].astype(np.float64)
     cy = workflow.geom.centroid[:, 1].astype(np.float64)
-    centers = spec.depression_centers()
-    nearest = np.empty(centers.shape[0], dtype=np.int64)
-    inside_any = np.zeros(cx.shape[0], dtype=np.bool_)
-    for k, (dxk, dyk) in enumerate(centers):
-        d2 = (cx - dxk) ** 2 + (cy - dyk) ** 2
-        nearest[k] = int(np.argmin(d2))
-        inside_any |= d2 < spec.dep_radius_m**2
-    plateau = ~inside_any
-    return nearest, plateau
+    nearest = np.empty(gauges.shape[0], dtype=np.int64)
+    for k, (gx, gy) in enumerate(gauges):
+        nearest[k] = int(np.argmin((cx - gx) ** 2 + (cy - gy) ** 2))
+    return nearest
+
+
+def _depth_grid(
+    spec: DepressionSpec, workflow: SWEWorkflow, h_final: NDArray[np.float32]
+) -> NDArray[np.float64]:
+    """Scatter solver-order depths back onto the (ny, nx) mesh grid."""
+    if workflow.geom is None:
+        raise RuntimeError("workflow must be prepared")
+    cx = workflow.geom.centroid[:, 0].astype(np.float64)
+    cy = workflow.geom.centroid[:, 1].astype(np.float64)
+    col = np.clip((cx / spec.dx_m).astype(np.int64), 0, spec.nx - 1)
+    row = np.clip((cy / spec.dy_m).astype(np.int64), 0, spec.ny - 1)
+    grid = np.zeros((spec.ny, spec.nx), dtype=np.float64)
+    grid[row, col] = h_final.astype(np.float64)
+    return grid
 
 
 def _evaluate_case(
@@ -363,23 +459,42 @@ def _evaluate_case(
     min_depth = float(h_final.min()) if h_final.size else 0.0
 
     injected = _injected_volume(spec)
-    mass_balance_rel = (
+    volume_drift_rel = (
         abs(result.volume_final_m3 - injected) / injected if injected > 0.0 else float("inf")
     )
 
-    nearest, plateau = _depression_masks(workflow, spec)
-    point_levels = [float(h_final[i]) for i in nearest]
-    ponded_count = int(sum(1 for lvl in point_levels if lvl > POND_LEVEL_M))
+    gauges = _load_gauges(spec.gauges_path)
+    zb = _bed_grid(spec)
+    basins = _gauge_basins(spec, zb, gauges)
+    cells = _gauge_cells(workflow, gauges)
+    point_depths = [float(h_final[i]) for i in cells]
+    sill_depths = [
+        sill - float(zb[int(gy // spec.dy_m), int(gx // spec.dx_m)])
+        for (sill, _pool, _cap), (gx, gy) in zip(basins, gauges, strict=True)
+    ]
 
-    # Points 15 & 16 (1-based) are the top two of the NE column: the last two
-    # entries in the column-major depression ordering.
-    far_corner = point_levels[-2:]
-    dry_far_corner = all(lvl < DRY_LEVEL_M for lvl in far_corner)
+    wet = [d > POND_LEVEL_M for d in point_depths]
+    # A settled pond cannot stand above its sill, nor can a basin hold more
+    # than its capacity — both are properties of the bed alone.
+    max_above_sill = max(
+        (d - s for d, s, w in zip(point_depths, sill_depths, wet, strict=True) if w),
+        default=0.0,
+    )
+    full = [d > s - FULL_BASIN_TOL_M for d, s in zip(point_depths, sill_depths, strict=True)]
+    full_capacity = sum(cap for (_sill, _pool, cap), f in zip(basins, full, strict=True) if f)
+    full_basin_capacity_rel = full_capacity / injected if injected > 0.0 else float("inf")
 
-    plateau_wet_frac = (
-        float(np.count_nonzero(h_final[plateau] > PLATEAU_WET_M) / np.count_nonzero(plateau))
-        if bool(plateau.any())
-        else 0.0
+    depth = _depth_grid(spec, workflow, h_final).reshape(-1)
+    in_basin = np.zeros(depth.shape[0], dtype=np.bool_)
+    for _sill, pool, _cap in basins:
+        in_basin[pool] = True
+    ponded_storage_frac = (
+        float(depth[in_basin].sum()) * spec.cell_area_m2 / injected if injected > 0.0 else 0.0
+    )
+
+    far_column = gauges[:, 0] == gauges[:, 0].max()
+    far_column_max = max(
+        (d for d, far in zip(point_depths, far_column, strict=True) if far), default=0.0
     )
 
     fail_reasons: list[str] = []
@@ -387,25 +502,40 @@ def _evaluate_case(
         fail_reasons.append("h_final_non_finite")
     if min_depth < -1e-6:
         fail_reasons.append(f"negative_depth:{min_depth:.3e}")
-    if mass_balance_rel > GATE_MASS_BALANCE_REL:
-        fail_reasons.append(f"mass_balance_rel:{mass_balance_rel:.3e}>{GATE_MASS_BALANCE_REL:.0e}")
-    if ponded_count < GATE_MIN_PONDED:
-        fail_reasons.append(f"ponded_count:{ponded_count}<{GATE_MIN_PONDED}")
-    if not dry_far_corner:
-        fail_reasons.append(f"far_corner_wet:{max(far_corner):.3e}>{DRY_LEVEL_M:.0e}")
-    if plateau_wet_frac > GATE_PLATEAU_WET_FRAC:
-        fail_reasons.append(f"plateau_wet_frac:{plateau_wet_frac:.3f}>{GATE_PLATEAU_WET_FRAC}")
+    if volume_drift_rel > GATE_VOLUME_DRIFT_REL:
+        fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
+    if max_above_sill > GATE_ABOVE_SILL_M:
+        fail_reasons.append(
+            f"pond_above_sill:{max_above_sill:.3f}>{GATE_ABOVE_SILL_M} "
+            f"(water standing above the sill it would spill over)"
+        )
+    if full_basin_capacity_rel > GATE_FULL_BASIN_CAPACITY_REL:
+        fail_reasons.append(
+            f"full_basin_capacity_rel:{full_basin_capacity_rel:.3f}>"
+            f"{GATE_FULL_BASIN_CAPACITY_REL} (more storage filled than was injected)"
+        )
+    if ponded_storage_frac < GATE_PONDED_STORAGE_FRAC:
+        fail_reasons.append(
+            f"ponded_storage_frac:{ponded_storage_frac:.3f}<{GATE_PONDED_STORAGE_FRAC} "
+            f"(water still stranded on the ridges at t_end)"
+        )
+    if far_column_max > GATE_FAR_COLUMN_DRY_M:
+        fail_reasons.append(f"far_column_depth:{far_column_max:.3f}>{GATE_FAR_COLUMN_DRY_M}")
 
     return CaseMetrics(
         case=spec.name,
         backend=backend,
-        mass_balance_rel=mass_balance_rel,
+        volume_drift_rel=volume_drift_rel,
         min_depth_m=min_depth,
-        ponded_count=ponded_count,
-        dry_far_corner=dry_far_corner,
-        plateau_wet_frac=plateau_wet_frac,
+        ponded_count=sum(wet),
+        max_above_sill_m=max_above_sill,
+        full_basin_count=sum(full),
+        full_basin_capacity_rel=full_basin_capacity_rel,
+        ponded_storage_frac=ponded_storage_frac,
+        far_column_max_depth_m=far_column_max,
         h_final_finite=finite,
-        point_levels_m=point_levels,
+        point_depths_m=point_depths,
+        sill_depths_m=sill_depths,
         passed=not fail_reasons,
         fail_reasons=fail_reasons,
     )
@@ -504,12 +634,17 @@ def _run_group(
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
         )
+        # The solver snapshots every phase boundary too, so the 91 one-minute
+        # hydrograph phases would otherwise crowd the first 3% of the run.
+        gif_snapshots, gif_times = resample_snapshots_uniform(
+            gif_result.snapshots, gif_result.snap_times, safe_frames
+        )
         save_depth_gif(
             gif_workflow,
-            gif_result.snapshots,
-            gif_result.snap_times,
+            gif_snapshots,
+            gif_times,
             Path(args.output_dir) / f"{spec.name}-{backend}-2d.gif",
-            vmax=spec.dep_depth_m + 0.5,
+            vmax=GIF_VMAX_M,
             title_prefix=f"{spec.name} depressions — ",
         )
 
@@ -519,22 +654,27 @@ def _run_group(
 def _print_report(all_metrics: list[CaseMetrics], all_perf: list[PerfMetrics]) -> None:
     print()
     print(
-        f"gates: mass_balance<={GATE_MASS_BALANCE_REL:.0e} min_depth>=0 finite "
-        f"ponded>={GATE_MIN_PONDED} far_corner_dry plateau_wet<={GATE_PLATEAU_WET_FRAC}"
+        f"gates: volume_drift<={GATE_VOLUME_DRIFT_REL:.0e} min_depth>=0 finite "
+        f"above_sill<={GATE_ABOVE_SILL_M} full_capacity<={GATE_FULL_BASIN_CAPACITY_REL} "
+        f"ponded_storage>={GATE_PONDED_STORAGE_FRAC} far_column_dry"
     )
     print(
-        f"{'case':10} {'backend':24} {'mass_bal':>9} {'min_h':>10} {'ponded':>7} "
-        f"{'dry_15_16':>9} {'plat_wet':>9} {'pass':>5}"
+        f"{'case':10} {'backend':24} {'vol_drift':>9} {'min_h':>10} {'ponded':>7} "
+        f"{'full':>5} {'abv_sill':>9} {'cap_rel':>8} {'storage':>8} {'far_h':>7} {'pass':>5}"
     )
     for m in all_metrics:
         print(
-            f"{m.case:10} {m.backend:24} {m.mass_balance_rel:9.3e} {m.min_depth_m:10.3e} "
-            f"{m.ponded_count:7d} {m.dry_far_corner!s:>9} {m.plateau_wet_frac:9.3f} {m.passed!s:>5}"
+            f"{m.case:10} {m.backend:24} {m.volume_drift_rel:9.3e} {m.min_depth_m:10.3e} "
+            f"{m.ponded_count:7d} {m.full_basin_count:5d} {m.max_above_sill_m:9.3f} "
+            f"{m.full_basin_capacity_rel:8.3f} {m.ponded_storage_frac:8.3f} "
+            f"{m.far_column_max_depth_m:7.3f} {m.passed!s:>5}"
         )
         for reason in m.fail_reasons:
             print(f"  !! {reason}")
-        levels = " ".join(f"{lvl:.2f}" for lvl in m.point_levels_m)
-        print(f"  point levels (1..{len(m.point_levels_m)}) [m]: {levels}")
+        sim = " ".join(f"{d:.2f}" for d in m.point_depths_m)
+        sills = " ".join(f"{d:.2f}" for d in m.sill_depths_m)
+        print(f"  point depths (1..{len(m.point_depths_m)}) [m]: {sim}")
+        print(f"  basin sill depths              [m]: {sills}")
     print()
     print(
         f"{'case':10} {'backend':24} {'wall_s':>8} {'steps':>8} {'steps/s':>10} "
@@ -552,7 +692,7 @@ def _print_report(all_metrics: list[CaseMetrics], all_perf: list[PerfMetrics]) -
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="EA Test 2 floodplain-depressions (flattened egg box) benchmark"
+        description="EA Test 2 floodplain-depressions benchmark (published May-2010 dataset)"
     )
     parser.add_argument(
         "--backends",
@@ -560,14 +700,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"CSV of solver_impl names {AVAILABLE_BACKENDS} "
         f"(default: Vulkan reference, runnable without a second backend)",
     )
+    parser.add_argument("--dataset-dir", default=str(DEFAULT_DATASET_DIR))
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--nx", type=int, default=NX_DEFAULT)
     parser.add_argument("--ny", type=int, default=NY_DEFAULT)
+    parser.add_argument("--t-end", type=float, default=T_END_S)
     parser.add_argument("--dt-max", type=float, default=DT_MAX_DEFAULT)
     parser.add_argument("--cfl-interval", type=int, default=CFL_INTERVAL_DEFAULT)
-    parser.add_argument("--inflow-peak", type=float, default=INFLOW_PEAK_M3S)
-    parser.add_argument("--hydro-base", type=float, default=HYDROGRAPH_BASE_S)
-    parser.add_argument("--settle", type=float, default=SETTLE_S)
     parser.add_argument(
         "--output-interval-s",
         type=float,
@@ -602,10 +741,15 @@ def main() -> int:
 
     spec = _build_spec(args)
     mesh_path = _ensure_mesh(spec, output_dir)
+    gauges = _load_gauges(spec.gauges_path)
+    capacity = sum(cap for _sill, _pool, cap in _gauge_basins(spec, _bed_grid(spec), gauges))
     print(
-        f"[hydrograph] triangular peak {spec.inflow_peak_m3s} m^3/s over "
-        f"{spec.hydrograph_base_s / 60.0:.0f} min + {spec.settle_s / 60.0:.0f} min settle; "
-        f"injected volume ~= {_injected_volume(spec):.0f} m^3"
+        f"[hydrograph] published inflow, injected volume = {_injected_volume(spec):.0f} m^3; "
+        f"t_end {spec.t_end_s / 3600.0:.0f} h"
+    )
+    print(
+        f"[terrain] {gauges.shape[0]} depressions hold {capacity:.0f} m^3 below their sills "
+        f"({_injected_volume(spec) / capacity:.0%} of that is injected)"
     )
 
     all_metrics: list[CaseMetrics] = []
@@ -619,9 +763,11 @@ def main() -> int:
 
     summary = {
         "gates": {
-            "mass_balance_rel": GATE_MASS_BALANCE_REL,
-            "min_ponded": GATE_MIN_PONDED,
-            "plateau_wet_frac": GATE_PLATEAU_WET_FRAC,
+            "volume_drift_rel": GATE_VOLUME_DRIFT_REL,
+            "above_sill_m": GATE_ABOVE_SILL_M,
+            "full_basin_capacity_rel": GATE_FULL_BASIN_CAPACITY_REL,
+            "ponded_storage_frac": GATE_PONDED_STORAGE_FRAC,
+            "far_column_dry_m": GATE_FAR_COLUMN_DRY_M,
             "determinism_rel": GATE_DETERMINISM_REL,
         },
         "injected_volume_m3": _injected_volume(spec),
@@ -634,11 +780,7 @@ def main() -> int:
 
     correctness_ok = all(m.passed for m in all_metrics)
     determinism_ok = all(p.deterministic is not False for p in all_perf)
-    if correctness_ok and determinism_ok:
-        print("RESULT: PASS")
-        return 0
-    print("RESULT: FAIL")
-    return 1
+    return 0 if (correctness_ok and determinism_ok) else 1
 
 
 if __name__ == "__main__":

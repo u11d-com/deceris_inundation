@@ -2,60 +2,93 @@
 
 Overland-flow correctness benchmark — UK Environment Agency "Benchmarking of
 2D Hydraulic Modelling Packages" **Test 2, filling of floodplain
-depressions**. Harness:
+depressions**, run from the published May-2010 dataset. Harness:
 [floodplain_depressions.py](floodplain_depressions.py). Effort:
 [docs/implementation/15-floodplain-depressions/](../../../docs/implementation/15-floodplain-depressions/).
 
 ## What it validates
 
-A dry 2000 m × 2000 m floodplain with a "flattened egg box" topography — a
-flat plateau carved with a 4 × 4 grid of 16 shallow circular depressions — is
-flooded by a slow inflow hydrograph at the top-left corner. Unlike the
+A dry 2000 m × 2000 m floodplain — a "flattened egg box" of 16 ~0.5 m
+depressions on a plane falling ~2 m along the NW→SE diagonal — is flooded by
+a slow inflow hydrograph entering at the high (NW) corner. Unlike the
 dam-break cases, this exercises the parts of the solver a channel-aligned
 shock never touches: disconnected water bodies, wetting/drying of dry
 floodplain, and low-momentum inundation extent, judged on the _final_ ponded
 distribution.
 
-No closed form exists (EA Test 2 is a model-_intercomparison_ benchmark) and
-there is no external DEM (repo convention is synthetic meshes), so the egg-box
-bed is generated analytically (`bench/common.eggbox_bed`) with raised-cosine
-bowls plus a gentle NE rise that makes the top-right depressions the highest
-ground. Gates are therefore invariant/qualitative, not an error norm.
+The settled endpoint has no closed form and no defensible routed prediction
+(see [results.md](../../../docs/implementation/15-floodplain-depressions/results.md)
+for the fill-spill cascade that was tried and rejected). What the terrain
+_does_ fix is a set of **bounds**: `bench/common.depression_basin` walks
+downhill from each output point to its basin floor and raises a level until
+the pool finds a lower outlet, yielding that depression's **sill elevation**
+and **storage capacity**. Water at rest cannot stand above its sill, and the
+depressions that fill cannot together hold more than was injected. The gates
+are those bounds plus conservation.
+
+## Dataset
+
+`Benchmarking_Model_Data/Test2 dataset 2010` (checked into the repo,
+`--dataset-dir` to override):
+
+| File                     | Use                                                |
+| ------------------------ | -------------------------------------------------- |
+| `test2DEM.asc`           | 1201 × 1201 georeferenced 2 m raster (200 m apron) |
+| `Test2_BC.csv`           | inflow hydrograph, minutes vs cumecs               |
+| `Test2output.csv`        | 16 output points, one per depression centre        |
+| `Test2ActiveArea_region` | modelled area — x, y ∈ [0, 2000] m                 |
+| `Test2BC_polyline`       | inflow line — western boundary, y ∈ [1900, 2000] m |
+
+The 2 m raster is cell-averaged onto the model resolution
+(`bench/common.block_average_grid`), which is the finite-volume-consistent
+way to coarsen a published DEM. Mesh coordinates coincide with the DEM's
+georeference, so the published output points are used as-is.
 
 ## Setup
 
-| Parameter            | Default                          | Meaning                       |
-| -------------------- | -------------------------------- | ----------------------------- |
-| Domain               | 2000 m × 2000 m                  | closed (reflective) walls     |
-| Grid                 | 100 × 100                        | `--nx` / `--ny` (dx = 20 m)   |
-| Depressions          | 4 × 4 = 16, R = 100 m, depth 0.5 m | raised-cosine bowls           |
-| NE rise              | 1.0 m                            | keeps points 15 & 16 dry      |
-| Manning `n`          | 0.03                             | floodplain roughness          |
-| Inflow               | peak 20 m³/s, base 85 min        | `--inflow-peak` / `--hydro-base` |
-| Settle tail          | 3600 s                           | `--settle`                    |
-| `t_end`              | 8700 s (float32-exact)           | base + settle                 |
-| `dt_max` / `dt_init` | 5.0 s / 1e-2 s                   | timestep bounds               |
-| `cfl_interval`       | 10                               | steps per CFL recompute       |
+| Parameter            | Default                    | Meaning                                      |
+| -------------------- | -------------------------- | -------------------------------------------- |
+| Domain               | 2000 m × 2000 m            | closed (reflective) walls                    |
+| Grid                 | 100 × 100                  | `--nx` / `--ny` (dx = 20 m, spec resolution) |
+| Manning `n`          | 0.03                       | spec value, uniform                          |
+| Inflow               | peak 20 m³/s, ~85 min base | published hydrograph, 97 200 m³              |
+| Initial condition    | dry bed                    | spec                                         |
+| `t_end`              | 172 800 s (48 h)           | `--t-end` (spec: settle to final state)      |
+| `dt_max` / `dt_init` | 5.0 s / 1e-2 s             | timestep bounds                              |
+| `cfl_interval`       | 10                         | steps per CFL recompute                      |
 
 Output-point numbering is the EA convention `p = col·4 + row + 1` (columns
-west→east, rows south→north); `p15`/`p16` are the far-NE depressions.
+west→east, rows south→north): `p1` is the SW depression, `p16` the NE one.
+
+The published inflow is a boundary condition; this solver has no open
+boundaries, so it is injected as five equal-split volume sources on the first
+cell column along the published inflow line. Volume sources carry no momentum
+vector — conservative for a case judged on the settled distribution. The
+hydrograph is applied as 60 s piecewise-constant phases sampled at midpoints,
+which integrates the published piecewise-linear curve exactly (every
+breakpoint is a whole minute) and keeps the default backend on its
+GPU-resident path.
 
 ## Gates
 
-| Gate                     | Threshold      | Notes                                          |
-| ------------------------ | -------------- | ---------------------------------------------- |
-| `GATE_MASS_BALANCE_REL`  | 5e-3           | final volume vs injected (closed, dry start)   |
-| positivity + finite      | min depth ≥ 0  | wetting/drying stability                       |
-| `GATE_MIN_PONDED`        | 3 of 16        | disconnected ponded bodies (`POND_LEVEL_M` 0.05) |
-| points 15 & 16 dry       | < 1e-3 m       | far-NE high ground never floods                |
-| `GATE_PLATEAU_WET_FRAC`  | 0.15           | ridges stay dry (`PLATEAU_WET_M` 0.05)         |
-| `GATE_DETERMINISM_REL`   | 5e-4           | run-to-run reproducibility                     |
+| Gate                           | Threshold | Notes                                               |
+| ------------------------------ | --------- | --------------------------------------------------- |
+| `GATE_VOLUME_DRIFT_REL`        | 2e-4      | final volume vs injected (closed, dry start)        |
+| positivity + finite            | min h ≥ 0 | wetting/drying stability                            |
+| `GATE_ABOVE_SILL_M`            | 0.03 m    | no pond stands above the sill it would spill over   |
+| `GATE_FULL_BASIN_CAPACITY_REL` | 1.0       | filled basins hold no more than was injected        |
+| `GATE_PONDED_STORAGE_FRAC`     | 0.90      | volume has drained off the ridges into storage      |
+| `GATE_FAR_COLUMN_DRY_M`        | 0.05 m    | east column (p13–p16) is out of reach of the volume |
+| `GATE_DETERMINISM_REL`         | 1e-4      | run-to-run reproducibility                          |
 
-Mass balance is the anchor gate: a closed domain started dry retains every
-injected cubic metre. Determinism is tolerance-based, not bit-exact (see the
-`atomicAdd` note in [dambreak.md](dambreak.md)); the bound is looser than the
-dam-break cases' 1e-5 because this run is ~20× longer (~9k steps), so the
-non-associative device-side reductions accumulate more drift (~1e-4).
+`POND_LEVEL_M` (0.05 m) is the wet threshold — below it is residual film, not
+inundation. Mass balance is the anchor gate: a closed domain started dry
+retains every injected cubic metre. The sill allowance covers the sub-cell
+discretisation of the pool boundary (one 20 m cell spans ~0.026 m of the local
+bed gradient). Determinism is tolerance-based, not bit-exact (see the
+`atomicAdd` note in [dambreak.md](dambreak.md)); despite being the longest run
+in the suite it holds ~1.8e-6, because the settled ponds damp the drift out
+rather than accumulating it.
 
 ## Backends
 
@@ -80,14 +113,17 @@ just benchmark-depressions --backends gpu_resident_batch,fixed_dt_batch_barrier
 
 `--repeats >= 2` enables the determinism check; `--warmup` runs are excluded
 from timing. The animation comes from a single _untimed_ extra run, so perf
-numbers stay clean.
+numbers stay clean. Frames are resampled onto uniform simulated time before
+rendering: the solver emits a snapshot at every phase boundary, so the 91
+one-minute hydrograph phases would otherwise crowd the first 3% of the run
+into most of the animation and make playback lurch when the inflow stops.
 
 ### Key flags
 
 - `--backends` — CSV of solver impls (see above).
+- `--dataset-dir` — published dataset location.
 - `--nx` / `--ny` — grid resolution.
-- `--dt-max` / `--cfl-interval` — timestep controls.
-- `--inflow-peak` / `--hydro-base` / `--settle` — hydrograph overrides.
+- `--t-end` / `--dt-max` / `--cfl-interval` — run length and timestep controls.
 - `--output-interval-s` — snapshot cadence for timed runs (default: one final
   snapshot).
 - `--gif` — top-down 2D depth-heatmap animation.
@@ -97,12 +133,14 @@ numbers stay clean.
 
 Written under `.tmp/floodplain-depressions-bench/`:
 
-- `eggbox-<nx>x<ny>.parquet` — generated egg-box mesh.
-- `summary.json` — gates, per-point levels, correctness + perf metrics.
+- `eggbox-dem2010-<nx>x<ny>.parquet` — DEM-sampled mesh.
+- `summary.json` — gates, per-point depths and basin sill depths, correctness
+  - perf metrics.
 - `eggbox-<backend>-2d.gif` — top-down depth heatmap of the flooding.
 
-## Measured result (MoltenVK, `gpu_resident_batch`)
+## Measured result
 
-PASS — mass balance = 1.8e-6, min h = 0.0, ponded = 5/16, points 15 & 16
-dry, plateau wet = 0.104, determinism ✓. See
+PASS on MoltenVK / `gpu_resident_batch` — mass balance 9.4e-5, ponds at most
+0.007 m above their sills, filled storage 0.835 of injected, 99.9% of the
+volume in depression storage, far column dry, reproducibility 1.8e-6. See
 [results.md](../../../docs/implementation/15-floodplain-depressions/results.md).

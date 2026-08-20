@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
 import statistics
 import sys
@@ -258,6 +259,32 @@ def _reordered_polygons(
         idx = faces_flat[face_offsets[old_i] : face_offsets[old_i + 1]]
         polygons.append(verts[idx])
     return polygons, verts
+
+
+def resample_snapshots_uniform(
+    snapshots: Sequence[NDArray[np.floating[Any]]],
+    snap_times: Sequence[float],
+    n_frames: int,
+) -> tuple[list[NDArray[np.floating[Any]]], list[float]]:
+    """Pick the snapshot nearest each of ``n_frames`` evenly spaced sim times.
+
+    Solvers emit a snapshot at every phase boundary as well as on the output
+    interval, so a run whose hydrograph is chopped into many short phases
+    returns frames bunched into the inflow window — an animation that races
+    once the phases end. Resampling on simulated time restores constant
+    playback speed; repeated frames where nothing new was captured are
+    intentional.
+    """
+    if n_frames < 1:
+        raise ValueError(f"n_frames must be >= 1, got {n_frames}")
+    times = np.asarray(snap_times, dtype=np.float64)
+    if times.shape[0] != len(snapshots):
+        raise ValueError("snapshots and snap_times must have equal length")
+    targets = np.linspace(float(times[0]), float(times[-1]), n_frames)
+    right = np.clip(np.searchsorted(times, targets), 1, times.shape[0] - 1)
+    left = right - 1
+    nearest = np.where(targets - times[left] <= times[right] - targets, left, right)
+    return [snapshots[int(i)] for i in nearest], [float(t) for t in targets]
 
 
 def save_depth_gif(
@@ -864,61 +891,296 @@ def radial_dambreak_reference(
     return np.interp(r_eval64, r_c, h), np.interp(r_eval64, r_c, u)
 
 
-# ── EA Test 2: flattened egg-box floodplain-depression bed ──────────────────
+# ── Published EA dataset rasters + terrain-derived depression storage ───────
 
 
-def eggbox_depression_centers(domain_l: float, n_per_side: int) -> NDArray[np.float64]:
-    """Centers of the ``n_per_side`` x ``n_per_side`` depression grid.
+@dataclass(frozen=True)
+class AsciiGrid:
+    """An ESRI ASCII raster with both axes ascending.
 
-    Ordered column-major from the bottom-left, matching the Environment
-    Agency Test 2 output-point numbering: point ``p`` (1-based) sits at
-    ``col * n_per_side + row + 1`` with columns running west→east (``x``) and
-    rows south→north (``y``). So ``p = 1`` is the SW depression and
-    ``p = n_per_side**2`` is the NE one.
+    ``z[j, i]`` is the elevation of the cell centred on ``(x[i], y[j])``. The
+    file's north→south row order is flipped on load so ``y`` ascends like
+    ``x``, matching the benchmark meshes' cell ordering (row-major, y up).
+    NODATA cells are NaN.
     """
-    step = domain_l / n_per_side
-    coords = (np.arange(n_per_side, dtype=np.float64) + 0.5) * step
-    centers = np.empty((n_per_side * n_per_side, 2), dtype=np.float64)
-    k = 0
-    for col in range(n_per_side):
-        for row in range(n_per_side):
-            centers[k, 0] = coords[col]
-            centers[k, 1] = coords[row]
-            k += 1
-    return centers
+
+    x: NDArray[np.float64]
+    y: NDArray[np.float64]
+    z: NDArray[np.float64]
+    cellsize: float
 
 
-def eggbox_bed(
-    cx: NDArray[np.floating[Any]],
-    cy: NDArray[np.floating[Any]],
+def load_ascii_grid(path: Path) -> AsciiGrid:
+    """Parse a 6-header-line ESRI ASCII raster (the EA benchmark DEM format)."""
+    header: dict[str, float] = {}
+    with path.open(encoding="ascii") as f:
+        for _ in range(6):
+            key, value = f.readline().split()
+            header[key.lower()] = float(value)
+        rows = np.loadtxt(f, dtype=np.float64)
+    ncols, nrows = int(header["ncols"]), int(header["nrows"])
+    if rows.shape != (nrows, ncols):
+        raise ValueError(f"raster shape {rows.shape} != header ({nrows}, {ncols})")
+    cell = header["cellsize"]
+    z = np.flipud(rows).copy()
+    z[z == header["nodata_value"]] = np.nan
+    return AsciiGrid(
+        x=header["xllcorner"] + (np.arange(ncols, dtype=np.float64) + 0.5) * cell,
+        y=header["yllcorner"] + (np.arange(nrows, dtype=np.float64) + 0.5) * cell,
+        z=z,
+        cellsize=cell,
+    )
+
+
+def block_average_grid(
+    grid: AsciiGrid,
     *,
-    domain_l: float,
-    n_per_side: int = 4,
-    plateau_z: float = 0.0,
-    ne_rise_m: float = 0.0,
-    dep_radius_m: float,
-    dep_depth_m: float,
-) -> NDArray[np.float32]:
-    """Flattened egg-box bed elevation at cell centers ``(cx, cy)``.
+    x_edges: NDArray[np.float64],
+    y_edges: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Average a raster onto the coarser mesh cells defined by the edge arrays.
 
-    A flat plateau (``plateau_z``) with a gentle rise toward the NE corner
-    (``ne_rise_m`` total, distributed as ``(x + y) / (2 * domain_l)``) and
-    ``n_per_side**2`` smooth circular depressions of depth ``dep_depth_m`` and
-    radius ``dep_radius_m`` carved into it. Each depression is a raised-cosine
-    (Hann) bowl: full depth at its center, blending C¹-smoothly back to the
-    surrounding surface at ``dep_radius_m``. The NE rise makes the top-right
-    depressions structurally the highest ground, so the far corner stays dry
-    under a top-left inflow (the EA Test 2 result: points 15 & 16 remain dry).
+    Cell-average (rather than point-sampled) bed elevation is the
+    finite-volume-consistent way to take a fine published DEM to the coarser
+    modelling resolution the EA specs prescribe. Raster cells outside the
+    mesh extent (the DEM apron) are ignored; every mesh cell must receive at
+    least one raster cell, and NODATA inside the mesh extent is an error.
     """
-    x = np.asarray(cx, dtype=np.float64)
-    y = np.asarray(cy, dtype=np.float64)
-    z = np.full(x.shape, float(plateau_z), dtype=np.float64)
-    z += ne_rise_m * ((x + y) / (2.0 * domain_l))
-    for cxk, cyk in eggbox_depression_centers(domain_l, n_per_side):
-        d = np.sqrt((x - cxk) ** 2 + (y - cyk) ** 2)
-        bowl = 0.5 * (1.0 + np.cos(np.pi * np.clip(d / dep_radius_m, 0.0, 1.0)))
-        z -= np.where(d < dep_radius_m, dep_depth_m * bowl, 0.0)
-    return z.astype(np.float32)
+    nx = x_edges.shape[0] - 1
+    ny = y_edges.shape[0] - 1
+    if nx < 1 or ny < 1:
+        raise ValueError("x_edges and y_edges must each have at least two entries")
+    xi = np.searchsorted(x_edges, grid.x, side="right") - 1
+    yj = np.searchsorted(y_edges, grid.y, side="right") - 1
+    keep_x = (xi >= 0) & (xi < nx)
+    keep_y = (yj >= 0) & (yj < ny)
+    z = grid.z[np.ix_(keep_y, keep_x)]
+    if not bool(np.isfinite(z).all()):
+        raise ValueError("raster has NODATA cells inside the mesh extent")
+    flat = (yj[keep_y][:, None] * nx + xi[keep_x][None, :]).ravel()
+    count = np.bincount(flat, minlength=nx * ny)
+    if bool(np.any(count == 0)):
+        raise ValueError("mesh extends beyond the raster coverage (empty mesh cells)")
+    total = np.bincount(flat, weights=z.ravel(), minlength=nx * ny)
+    return (total / count).reshape(ny, nx)
+
+
+_NEIGHBOUR_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
+
+def _descend(w: NDArray[np.float64], flat: int) -> int:
+    """Walk from ``flat`` to a local minimum of surface ``w`` (4-connected)."""
+    ny, nx = w.shape
+    while True:
+        j, i = divmod(flat, nx)
+        best, best_w = flat, w[j, i]
+        for dj, di in _NEIGHBOUR_OFFSETS:
+            nj, ni = j + dj, i + di
+            if 0 <= nj < ny and 0 <= ni < nx and w[nj, ni] < best_w:
+                best, best_w = nj * nx + ni, w[nj, ni]
+        if best == flat:
+            return flat
+        flat = best
+
+
+def _flood_to_sill(
+    w: NDArray[np.float64], seed: int
+) -> tuple[float, NDArray[np.int64], int | None]:
+    """Rise the level from ``seed`` until the pool finds a lower outlet.
+
+    Returns ``(sill level, pool cell indices, outlet index)``; the outlet is
+    ``None`` when the whole domain floods without one.
+    """
+    ny, nx = w.shape
+    visited = np.zeros(ny * nx, dtype=np.bool_)
+    frontier: list[tuple[float, int]] = [(float(w.flat[seed]), seed)]
+    visited[seed] = True
+    pool: list[int] = []
+    level = float(w.flat[seed])
+    while frontier:
+        wc, flat = heapq.heappop(frontier)
+        if wc < level:
+            return level, np.array(pool, dtype=np.int64), flat
+        level = wc
+        pool.append(flat)
+        j, i = divmod(flat, nx)
+        for dj, di in _NEIGHBOUR_OFFSETS:
+            nj, ni = j + dj, i + di
+            if 0 <= nj < ny and 0 <= ni < nx:
+                nflat = nj * nx + ni
+                if not visited[nflat]:
+                    visited[nflat] = True
+                    heapq.heappush(frontier, (float(w[nj, ni]), nflat))
+    return level, np.array(pool, dtype=np.int64), None
+
+
+def _pool_capacity(surface: NDArray[np.float64], cell_area: float, level: float) -> float:
+    """Volume needed to raise the pool cells ``surface`` to ``level``."""
+    return float(np.clip(level - surface, 0.0, None).sum()) * cell_area
+
+
+def depression_basin(
+    zb: NDArray[np.float64], cell: tuple[int, int], *, cell_area: float
+) -> tuple[float, NDArray[np.int64], float]:
+    """The depression draining ``cell``: (sill elevation, pool cells, capacity).
+
+    Walks downhill from ``cell`` to the basin floor, then raises a water level
+    until the pool finds a lower outlet — the sill it would spill over. Water
+    at rest cannot stand above that sill, and the basin cannot hold more than
+    the returned capacity, so both are terrain-derived bounds a settled
+    shallow-water solution must respect.
+
+    ``cell`` is a ``(row, col)`` index into the ``(ny, nx)`` bed. A basin with
+    no outlet (the whole domain) comes back with the domain maximum as its
+    sill.
+    """
+    if cell_area <= 0.0:
+        raise ValueError(f"cell_area must be positive, got {cell_area}")
+    ny, nx = zb.shape
+    flat = int(cell[0]) * nx + int(cell[1])
+    if not 0 <= flat < ny * nx:
+        raise ValueError(f"cell {cell} is outside the ({ny}, {nx}) bed")
+    level, pool, _outlet = _flood_to_sill(zb, _descend(zb, flat))
+    return level, pool, _pool_capacity(zb.reshape(-1)[pool], cell_area, level)
+
+
+# ── EA Test 4: radial spread of a source inflow over a flat frictional plain ─
+
+
+@dataclass(frozen=True)
+class RadialInflowSolution:
+    """Axisymmetric reference for a source-fed flood spreading over a plain."""
+
+    r_m: NDArray[np.float64]  # (n_cells,) cell centres
+    times_s: NDArray[np.float64]  # (n_times,) requested sample times
+    h_m: NDArray[np.float64]  # (n_times, n_cells)
+    speed_ms: NDArray[np.float64]  # (n_times, n_cells) |u|
+    arrival_s: NDArray[np.float64]  # (n_cells,) first wet time, inf if never
+
+    def depth_at(self, time_index: int, radii: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
+        return np.interp(np.asarray(radii, dtype=np.float64), self.r_m, self.h_m[time_index])
+
+    def speed_at(self, time_index: int, radii: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
+        return np.interp(np.asarray(radii, dtype=np.float64), self.r_m, self.speed_ms[time_index])
+
+    def arrival_at(self, radii: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
+        return np.interp(np.asarray(radii, dtype=np.float64), self.r_m, self.arrival_s)
+
+
+def solve_radial_inflow(
+    sample_times_s: Sequence[float],
+    *,
+    hydrograph_t_s: NDArray[np.float64],
+    hydrograph_q_m3s: NDArray[np.float64],
+    source_radius_m: float,
+    manning_n: float,
+    g: float,
+    r_max: float,
+    wet_tol_m: float = 0.01,
+    n_cells: int = 1400,
+    cfl: float = 0.9,
+    dt_max: float = 2.0,
+    dry_tol: float = 1e-8,
+) -> RadialInflowSolution:
+    """Fine-grid 1D axisymmetric reference for a hydrograph poured onto a plain.
+
+    Solves the axisymmetric shallow-water equations with Manning friction
+
+        d(r h)/dt   + d(r h u)/dr               = r S(t)
+        d(r h u)/dt + d(r (h u^2 + g h^2/2))/dr = g h^2 / 2 - r g n^2 u|u| h^(-1/3)
+
+    over a flat bed, using the same first-order HLL flux and SSP-RK2 stepping
+    as :func:`solve_radial_dambreak` with the friction applied implicitly. The
+    inflow ``S`` is spread uniformly over a disc of ``source_radius_m``.
+
+    For an inflow entering along a *closed wall*, reflection makes the
+    half-plane problem identical to this full-plane one with twice the
+    discharge — pass the doubled hydrograph. Valid only while the front stays
+    clear of every domain boundary; past that the 2D solution sees walls this
+    reference does not.
+
+    ``arrival_s`` records when each radius first exceeds ``wet_tol_m``, which
+    is what a flood-propagation-speed benchmark actually scores.
+    """
+    times = np.asarray(sample_times_s, dtype=np.float64)
+    if times.size == 0 or bool(np.any(np.diff(times) <= 0.0)):
+        raise ValueError("sample_times_s must be non-empty and strictly increasing")
+    if float(times[0]) <= 0.0:
+        raise ValueError(f"sample times must be positive, got {times[0]}")
+    if source_radius_m <= 0.0 or source_radius_m >= r_max:
+        raise ValueError(f"need 0 < source_radius_m < r_max, got {source_radius_m}, {r_max}")
+
+    dr = r_max / n_cells
+    r_c = (np.arange(n_cells, dtype=np.float64) + 0.5) * dr
+    r_f = np.arange(n_cells + 1, dtype=np.float64) * dr
+    in_source = r_c < source_radius_m
+    source_area = float(np.pi * source_radius_m**2)
+
+    h = np.zeros(n_cells, dtype=np.float64)
+    m = np.zeros(n_cells, dtype=np.float64)
+    arrival = np.full(n_cells, np.inf, dtype=np.float64)
+    h_out = np.zeros((times.size, n_cells), dtype=np.float64)
+    speed_out = np.zeros((times.size, n_cells), dtype=np.float64)
+
+    def rhs(
+        hs: NDArray[np.float64], ms: NDArray[np.float64], t_mid: float
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        us = np.where(hs > dry_tol, ms / np.maximum(hs, dry_tol), 0.0)
+        fh_int, fm_int = _radial_hll_flux(hs[:-1], ms[:-1], hs[1:], ms[1:], g, dry_tol)
+        fh_face = np.empty(n_cells + 1, dtype=np.float64)
+        fm_face = np.empty(n_cells + 1, dtype=np.float64)
+        fh_face[1:-1] = fh_int
+        fm_face[1:-1] = fm_int
+        fh_face[0] = 0.0
+        fm_face[0] = 0.5 * g * hs[0] * hs[0]
+        fh_face[-1] = ms[-1]
+        fm_face[-1] = ms[-1] * us[-1] + 0.5 * g * hs[-1] * hs[-1]
+
+        rf_h = r_f * fh_face
+        rf_m = r_f * fm_face
+        dh = -(rf_h[1:] - rf_h[:-1]) / (dr * r_c)
+        dm = (-(rf_m[1:] - rf_m[:-1]) / dr + 0.5 * g * hs * hs) / r_c
+        q = float(np.interp(t_mid, hydrograph_t_s, hydrograph_q_m3s))
+        return dh + np.where(in_source, q / source_area, 0.0), dm
+
+    t = 0.0
+    t_end = float(times[-1])
+    next_sample = 0
+    max_steps = 10_000_000
+    for _ in range(max_steps):
+        if t >= t_end:
+            break
+        u = np.where(h > dry_tol, m / np.maximum(h, dry_tol), 0.0)
+        wave = float((np.abs(u) + np.sqrt(g * np.maximum(h, 0.0))).max())
+        dt = min(cfl * dr / wave if wave > 0.0 else dt_max, dt_max, t_end - t)
+        if next_sample < times.size:
+            dt = min(dt, float(times[next_sample]) - t)
+
+        dh1, dm1 = rhs(h, m, t + 0.5 * dt)
+        h1 = np.maximum(h + dt * dh1, 0.0)
+        m1 = np.where(h1 > dry_tol, m + dt * dm1, 0.0)
+        dh2, dm2 = rhs(h1, m1, t + 0.5 * dt)
+        h = np.maximum(h + 0.5 * dt * (dh1 + dh2), 0.0)
+        m = np.where(h > dry_tol, m + 0.5 * dt * (dm1 + dm2), 0.0)
+
+        # Manning friction, implicit so it cannot reverse the flow.
+        u = np.where(h > dry_tol, m / np.maximum(h, dry_tol), 0.0)
+        friction = 1.0 + dt * g * manning_n**2 * np.abs(u) / np.maximum(h, dry_tol) ** (4.0 / 3.0)
+        m = np.where(h > dry_tol, m / friction, 0.0)
+        t += dt
+
+        newly_wet = (h > wet_tol_m) & ~np.isfinite(arrival)
+        arrival[newly_wet] = t
+        while next_sample < times.size and t >= float(times[next_sample]) - 1e-9:
+            h_out[next_sample] = h
+            speed_out[next_sample] = np.abs(np.where(h > dry_tol, m / np.maximum(h, dry_tol), 0.0))
+            next_sample += 1
+    else:
+        raise RuntimeError(f"radial inflow solve did not reach {t_end} s in {max_steps} steps")
+
+    return RadialInflowSolution(
+        r_m=r_c, times_s=times, h_m=h_out, speed_ms=speed_out, arrival_s=arrival
+    )
 
 
 # ── EA Test 3: sloping channel, obstruction between two depressions ─────────
@@ -935,9 +1197,10 @@ def sloping_obstruction_bed(
 
     The bed elevation is the linear interpolation of the ``(control_x,
     control_z)`` control points along ``x`` and is uniform across ``y``. The
-    momentum-obstruction harness traces a closed flat-base trap: tall
-    containment walls, two flat-bottomed bowls (Point 1, Point 2), and a
-    flat-topped central sill (the obstruction) between them. ``control_x`` must
+    momentum-obstruction harness traces the published Test 3 long profile: a
+    reservoir shelf, a uniform approach slope, two cosine depressions
+    (Points 1 and 2) separated by a rounded hump (the obstruction), and a
+    rise back up to the right boundary. ``control_x`` must
     be strictly increasing and span the mesh's ``x`` range so no cell falls
     outside the interpolation.
 
