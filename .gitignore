@@ -26,3 +26,9 @@ deceris/inundation/results/
 .qmd/*.sqlite*
 
 .DS_Store
+
+# Published UK Environment Agency 2D benchmark datasets (May-2010 distribution).
+# Not redistributed here; EA Tests 2/3/4 read them from this path. Obtain the
+# archive separately and unpack it as Benchmarking_Model_Data/ to run those
+# benchmarks (`just benchmark-depressions|obstruction|propagation`).
+Benchmarking_Model_Data/

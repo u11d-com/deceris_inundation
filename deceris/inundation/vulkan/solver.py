@@ -118,6 +118,8 @@ class SWESolver:
         self._work_group_size = workgroup_size
 
         self._h0 = h0.astype(np.float32)
+        self._hu0 = hu0.astype(np.float32)
+        self._hv0 = hv0.astype(np.float32)
         self._area = geom.area
 
         # CFL sentinel
@@ -318,6 +320,8 @@ class SWESolver:
     ) -> None:
         """Re-upload initial conditions without rebuilding GPU resources."""
         self._h0 = self._as_f32_1d(h0).copy()
+        self._hu0 = self._as_f32_1d(hu0).copy()
+        self._hv0 = self._as_f32_1d(hv0).copy()
         zeros = np.zeros(self.N, dtype=np.float32)
 
         self._set_tensor_host_data(self.t_h, h0)
@@ -333,9 +337,26 @@ class SWESolver:
             )
         ).eval()
 
+    def _reset_to_initial(self) -> None:
+        """Restore the initial condition, momentum included, for a fresh run."""
+        self.reset(self._h0, self._hu0, self._hv0)
+
     def download_h(self) -> NDArray[np.float32]:
         """Download the current water-depth array from the GPU."""
         return self._download(self.t_h)
+
+    def download_hu(self) -> NDArray[np.float32]:
+        """Download the current x-momentum (h*u) array from the GPU.
+
+        ``t_hu`` holds committed state, not a Heun intermediate: the corrector
+        stage writes the averaged result back into ``h``/``hu``/``hv`` while
+        ``h1``/``hu1``/``hv1`` carry the predictor (see ``shaders/update.py``).
+        """
+        return self._download(self.t_hu)
+
+    def download_hv(self) -> NDArray[np.float32]:
+        """Download the current y-momentum (h*v) array from the GPU. See ``download_hu``."""
+        return self._download(self.t_hv)
 
     def run(
         self,
@@ -397,7 +418,7 @@ class SWESolver:
         cfl = self._cfl
 
         if not resume:
-            self.reset(self._h0, np.zeros(N, np.float32), np.zeros(N, np.float32))
+            self._reset_to_initial()
 
         # Precompute inverse area for source application
         inv_area = (1.0 / self._area).astype(np.float32)

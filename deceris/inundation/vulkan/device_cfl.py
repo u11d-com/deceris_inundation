@@ -79,7 +79,7 @@ class SWESolverDeviceCfl(SWESolver):
         cfl = self._cfl
 
         if not resume:
-            self.reset(self._h0, np.zeros(N, np.float32), np.zeros(N, np.float32))
+            self._reset_to_initial()
 
         inv_area = (1.0 / self._area).astype(np.float32)
         use_gpu_source = False

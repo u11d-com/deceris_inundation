@@ -94,7 +94,7 @@ class SWESolverAsyncSyncWindow(SWESolver):
         cfl_safety = 0.8
 
         if not resume:
-            self.reset(self._h0, np.zeros(N, np.float32), np.zeros(N, np.float32))
+            self._reset_to_initial()
 
         use_gpu_source = False
         src_dh_per_sec: NDArray[np.float32] | None = None

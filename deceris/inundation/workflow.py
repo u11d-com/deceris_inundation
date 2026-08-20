@@ -139,6 +139,8 @@ class WorkflowResult:
     volume_injected_m3: float
     wall_seconds: float
     steps_total: int
+    # Momentum components of the final state, in solver (Hilbert) order.
+    # Used to export complete warm starts and score velocity-based benchmarks.
     hu_final: NDArray[np.float32] | None = None
     hv_final: NDArray[np.float32] | None = None
 
@@ -553,6 +555,7 @@ class SWEWorkflow:
             )
         )
 
+        # Solver strategies may expose momentum downloads independently.
         download_hu = getattr(self.solver, "download_hu", None)
         download_hv = getattr(self.solver, "download_hv", None)
         hu_final: NDArray[np.float32] | None = (
