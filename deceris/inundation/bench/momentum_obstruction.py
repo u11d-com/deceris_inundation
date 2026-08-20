@@ -139,14 +139,13 @@ GATE_POINT1_PONDED_M = 0.05
 # this far below the obstruction crest elevation. The two depressions are
 # then hydraulically isolated (no continuous water body spans the crest), so
 # any water in the second must have been carried *over* the crest by the
-# bore. NB the crest gauge itself retains a thin residual film/puddle — an
-# inherent SWE wetting/drying artifact at this resolution — so dryness is
-# asserted via water-surface elevation, not the crest cell's raw depth. The
-# published dataset fills the first depression to the brim by design (inflow
-# 1310 m^3 vs ~1309 m^3 capacity below the crest), so Point 1 settles below
-# the crest only by the volume that overtopped (~9 mm measured on
-# gpu_resident_batch); the margin must sit below that design freeboard
-# (5 mm ~= 1.7x headroom).
+# bore. Dryness is asserted via water-surface elevation rather than the crest
+# cell's raw depth, so a residual film there could not mask a connection (on
+# the published dataset the crest in fact drains to exactly 0). The dataset
+# fills the first depression to the brim by design (inflow 1310 m^3 vs
+# ~1309 m^3 capacity below the crest), so Point 1 settles below the crest
+# only by the volume that overtopped (~9 mm measured on gpu_resident_batch);
+# the margin must sit below that design freeboard (5 mm ~= 1.8x headroom).
 GATE_PONDS_BELOW_CREST_M = 0.005
 # Momentum signature: Point 2 (second depression, past the dry crest) must
 # hold at least this depth at t_end. An inertia-free model can at best fill

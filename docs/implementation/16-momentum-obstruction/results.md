@@ -1,16 +1,17 @@
-# 16 — EA Test 3 momentum over an obstruction — results
+# 16 — EA Test 3 momentum obstruction — results
 
-Status: **failing because the still-water control exposes a well-balance gap**.
+Status: **passing** on macOS/MoltenVK with `gpu_resident_batch` using the
+published May-2010 dataset.
 
-| Backend | Vol drift | Min h | Valley depth | Ponds disconnected | Far depth | Control far depth | Pass |
-| --- | ---: | ---: | ---: | --- | ---: | ---: | --- |
-| `gpu_resident_batch` | 6.1e-6 | 0.011 | 0.120 m | yes | 0.054 m | 0.091 m | no |
+| Backend | Vol drift | Min h | Point 1 | Crest | Point 2 | Control Point 2 | Disconnected | Repro | Pass |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `gpu_resident_batch` | 0.000 | 0.000 | 0.241 m | 0.000 m | 0.047 m | 0.000 m | yes | yes | yes |
 
-The at-rest control crosses the sill and fills the far bowl more deeply than
-the release run. Far-bowl water therefore cannot yet be credited to preserved
-momentum. The control gate records this as `well_balance_leak` until the missing
-hydrostatic interface correction is implemented.
+The 1310 m³ hydrograph nearly fills the first depression to its crest. The
+release carries 0.047 m into Point 2 while the equal-volume still-water control
+leaves Point 2 exactly dry. The crest also drains completely, so the two ponds
+are disconnected and Point 2 is an earned momentum signature rather than a
+well-balance artifact.
 
-The release and control remain finite, non-negative, and volume-conserving.
-Both final ponds are hydraulically disconnected below the crest. Approximately
-7000 RK2 steps completed in 3.0 s on the Apple GPU through MoltenVK.
+The 8710-step run completed in 4.96 s on the Apple GPU through MoltenVK. Volume
+closes exactly and repeated runs agree.

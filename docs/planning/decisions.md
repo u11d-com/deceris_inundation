@@ -27,21 +27,22 @@ Initial depth and both momentum components are preserved across workflow
 preparation and phase resets. Final momentum downloads are part of the retained
 warm-start and velocity-scoring contract.
 
-## Momentum-obstruction benchmark
-
-The elevated-release case pairs every release with a still-water control;
-control leakage is never credited as momentum.
-
 ## Hydrostatic interface correction
 
 The Audusse source correction is part of both Vulkan GLSL flux variants. Each
 cell uses its own actual and reconstructed depth along its own outward normal.
 This reduces lake-at-rest velocity from roughly 0.3–0.5 m/s to below 1e-4 m/s.
 
+## Momentum-obstruction benchmark
+
+The published Test 3 dataset is accepted only with a paired equal-volume
+still-water control. After the hydrostatic correction, the release ponds
+0.047 m beyond the obstruction while the control remains exactly dry. This
+makes the far pond a momentum signature rather than numerical leakage.
+
 ## Float32 mass floor
 
 Flood-propagation drift worsened under timestep and grid refinement and then
 saturated. This is consistent with small `dt * dh` increments being absorbed
 by float32 state, but remains a hypothesis until a float64 state comparison.
-The 1e-3 mass gate applies only to the measured Test 4 configuration. See
-`../implementation/18-flood-propagation/results.md`.
+The 1e-3 mass gate applies only to the measured Test 4 configuration.
