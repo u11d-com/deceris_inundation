@@ -73,6 +73,21 @@ benchmark-lake *args:
     {{docker_prefix}} uv run python -m deceris.inundation.benchmark_lake_at_rest {{args}}
 
 
+# Tier 1 radial dam-break benchmark.
+benchmark-radial-dambreak *args:
+    {{docker_prefix}} uv run python -m deceris.inundation.bench.radial_dambreak {{args}}
+
+# EA Test 2 floodplain-depressions benchmark.
+benchmark-depressions *args:
+    {{docker_prefix}} uv run python -m deceris.inundation.bench.floodplain_depressions {{args}}
+
+# EA Test 3 momentum-obstruction benchmark.
+benchmark-obstruction *args:
+    {{docker_prefix}} uv run python -m deceris.inundation.bench.momentum_obstruction {{args}}
+
+# EA Test 4 flood-propagation benchmark.
+benchmark-propagation *args:
+    {{docker_prefix}} uv run python -m deceris.inundation.bench.flood_propagation {{args}}
 
 shell:
     {{docker_prefix}} bash

@@ -16,3 +16,4 @@
 - [`15-floodplain-depressions/`](implementation/15-floodplain-depressions/)
 - [`16-momentum-obstruction/`](implementation/16-momentum-obstruction/)
 - [`17-audusse-well-balance-correction/`](implementation/17-audusse-well-balance-correction/)
+- [`18-flood-propagation/`](implementation/18-flood-propagation/)
