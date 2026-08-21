@@ -28,7 +28,6 @@ from deceris.inundation.bench.flood_propagation import (
     _injected_volume,
     _load_gauges,
     _load_hydrograph,
-    _max_rel_error,
 )
 
 from ._fixtures import requires_ea_dataset
@@ -215,24 +214,6 @@ class TestRadialReference:
                 r_max=400.0,
                 n_cells=100,
             )
-
-
-class TestMaxRelError:
-    def test_returns_a_scalar_not_an_array(self) -> None:
-        # Guards the arrival-error metric: a misplaced float() around the array
-        # instead of the reduction silently produced a TypeError at run time.
-        err = _max_rel_error(np.array([11.0, 18.0]), np.array([10.0, 20.0]))
-        assert isinstance(err, float)
-        assert err == pytest.approx(0.1)
-
-    def test_ignores_entries_the_front_never_reached(self) -> None:
-        actual = np.array([11.0, np.inf])
-        reference = np.array([10.0, 500.0])
-        assert _max_rel_error(actual, reference) == pytest.approx(0.1)
-
-    def test_infinite_when_nothing_is_comparable(self) -> None:
-        assert _max_rel_error(np.array([np.inf]), np.array([10.0])) == float("inf")
-        assert _max_rel_error(np.array([1.0]), np.array([0.0])) == float("inf")
 
 
 class TestRadialWindow:

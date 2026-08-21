@@ -36,8 +36,11 @@ import numpy as np
 
 from deceris.inundation.bench.common import (
     build_channel_mesh,
+    check_state_health,
+    l1_relative_error,
     save_depth_gif,
     solve_radial_dambreak,
+    volume_drift_rel,
     write_mesh_parquet,
 )
 from deceris.inundation.tuning import GRAVITY_G
@@ -382,8 +385,7 @@ def _evaluate_case(
         raise RuntimeError("workflow must be prepared")
 
     h_final = np.asarray(result.h_final, dtype=np.float32)
-    finite = bool(np.isfinite(h_final).all())
-    min_depth = float(h_final.min()) if h_final.size else 0.0
+    finite, min_depth, fail_reasons = check_state_health(h_final)
 
     r_centers, h_num, counts = _radial_profile(workflow, h_final, spec)
     valid = counts > 0
@@ -391,7 +393,7 @@ def _evaluate_case(
 
     abs_err = np.abs(h_num - h_ref)[valid]
     ref_valid = h_ref[valid]
-    l1_rel = float(abs_err.sum() / ref_valid.sum())
+    l1_rel = l1_relative_error(h_num[valid], ref_valid)
     l2_rel = float(np.sqrt((abs_err**2).sum() / (ref_valid**2).sum()))
 
     front_num = _front_radius(r_centers, h_num, counts, spec.front_threshold_m, spec.r_dam_m)
@@ -407,21 +409,16 @@ def _evaluate_case(
     r_solver = _cell_radius(workflow, spec)
     h0_solver = np.where(r_solver < spec.r_dam_m, spec.h_in_m, spec.h_out_m).astype(np.float64)
     volume_initial = float((h0_solver * area).sum())
-    volume_drift_rel = abs(result.volume_final_m3 - volume_initial) / volume_initial
+    drift_rel = volume_drift_rel(result.volume_final_m3, volume_initial)
 
-    fail_reasons: list[str] = []
-    if not finite:
-        fail_reasons.append("h_final_non_finite")
-    if min_depth < 0.0:
-        fail_reasons.append(f"negative_depth:{min_depth:.3e}")
     if l1_rel > GATE_L1_REL:
         fail_reasons.append(f"l1_rel:{l1_rel:.4f}>{GATE_L1_REL}")
     if front_rel_err > GATE_FRONT_REL:
         fail_reasons.append(f"front_rel_err:{front_rel_err:.4f}>{GATE_FRONT_REL}")
     if isotropy_spread > GATE_ISOTROPY:
         fail_reasons.append(f"isotropy_spread:{isotropy_spread:.4f}>{GATE_ISOTROPY}")
-    if volume_drift_rel > GATE_VOLUME_DRIFT_REL:
-        fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL}")
+    if drift_rel > GATE_VOLUME_DRIFT_REL:
+        fail_reasons.append(f"volume_drift_rel:{drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL}")
 
     return CaseMetrics(
         case=spec.name,
@@ -430,7 +427,7 @@ def _evaluate_case(
         l2_rel=l2_rel,
         front_rel_err=front_rel_err,
         isotropy_spread=isotropy_spread,
-        volume_drift_rel=volume_drift_rel,
+        volume_drift_rel=drift_rel,
         min_depth_m=min_depth,
         h_final_finite=finite,
         passed=not fail_reasons,

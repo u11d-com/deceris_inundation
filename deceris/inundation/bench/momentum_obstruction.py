@@ -63,10 +63,13 @@ import numpy as np
 
 from deceris.inundation.bench.common import (
     build_channel_mesh,
+    check_state_health,
     load_ascii_grid,
+    nearest_cell_indices,
     resample_snapshots_uniform,
     save_depth_gif,
     save_profile_gif,
+    volume_drift_rel,
     write_mesh_parquet,
 )
 from deceris.inundation.workflow import (
@@ -494,10 +497,13 @@ def _nearest_cell(workflow: SWEWorkflow, xy: tuple[float, float]) -> int:
     """Index of the solver cell whose centroid is nearest to ``xy``."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64)
-    cy = workflow.geom.centroid[:, 1].astype(np.float64)
-    d2 = (cx - xy[0]) ** 2 + (cy - xy[1]) ** 2
-    return int(np.argmin(d2))
+    return int(
+        nearest_cell_indices(
+            workflow.geom.centroid[:, 0],
+            workflow.geom.centroid[:, 1],
+            np.asarray([xy], dtype=np.float64),
+        )[0]
+    )
 
 
 def _evaluate_case(
@@ -512,16 +518,13 @@ def _evaluate_case(
 
     h_final = np.asarray(result.h_final, dtype=np.float32)
     zb = np.asarray(workflow.geom.zb, dtype=np.float32)
-    finite = bool(np.isfinite(h_final).all())
-    min_depth = float(h_final.min()) if h_final.size else 0.0
+    finite, min_depth, fail_reasons = check_state_health(h_final, min_depth_tol=-1e-6)
 
     # Mass balance: dry start + volume-conserving sources, so the final
     # volume must equal the injected hydrograph volume (mirrors
     # bench/floodplain_depressions.py).
     injected = _injected_volume(spec)
-    volume_drift_rel = (
-        abs(result.volume_final_m3 - injected) / injected if injected > 0.0 else float("inf")
-    )
+    drift_rel = volume_drift_rel(result.volume_final_m3, injected)
     crest_z = _crest_z(spec)
 
     c1 = _nearest_cell(workflow, spec.point1_xy)
@@ -539,13 +542,8 @@ def _evaluate_case(
     point2_risen = point2_depth >= GATE_POINT2_MIN_DEPTH_M
     control_dry = control_point2_depth_m <= GATE_CONTROL_POINT2_MAX_M
 
-    fail_reasons: list[str] = []
-    if not finite:
-        fail_reasons.append("h_final_non_finite")
-    if min_depth < -1e-6:
-        fail_reasons.append(f"negative_depth:{min_depth:.3e}")
-    if volume_drift_rel > GATE_VOLUME_DRIFT_REL:
-        fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
+    if drift_rel > GATE_VOLUME_DRIFT_REL:
+        fail_reasons.append(f"volume_drift_rel:{drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
     if not left_ponded:
         fail_reasons.append(
             f"point1_depth:{point1_depth:.3f}<{GATE_POINT1_PONDED_M} (depression not ponded)"
@@ -570,7 +568,7 @@ def _evaluate_case(
     return CaseMetrics(
         case=spec.name,
         backend=backend,
-        volume_drift_rel=volume_drift_rel,
+        volume_drift_rel=drift_rel,
         min_depth_m=min_depth,
         crest_z_m=crest_z,
         point1_depth_m=point1_depth,

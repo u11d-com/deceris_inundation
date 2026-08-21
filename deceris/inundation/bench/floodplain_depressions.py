@@ -59,10 +59,13 @@ import numpy as np
 from deceris.inundation.bench.common import (
     block_average_grid,
     build_channel_mesh,
+    check_state_health,
     depression_basin,
     load_ascii_grid,
+    nearest_cell_indices,
     resample_snapshots_uniform,
     save_depth_gif,
+    volume_drift_rel,
     write_mesh_parquet,
 )
 from deceris.inundation.workflow import (
@@ -422,12 +425,7 @@ def _gauge_cells(workflow: SWEWorkflow, gauges: NDArray[np.float64]) -> NDArray[
     """Solver cell nearest each published output point."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64)
-    cy = workflow.geom.centroid[:, 1].astype(np.float64)
-    nearest = np.empty(gauges.shape[0], dtype=np.int64)
-    for k, (gx, gy) in enumerate(gauges):
-        nearest[k] = int(np.argmin((cx - gx) ** 2 + (cy - gy) ** 2))
-    return nearest
+    return nearest_cell_indices(workflow.geom.centroid[:, 0], workflow.geom.centroid[:, 1], gauges)
 
 
 def _depth_grid(
@@ -455,13 +453,10 @@ def _evaluate_case(
         raise RuntimeError("workflow must be prepared")
 
     h_final = np.asarray(result.h_final, dtype=np.float32)
-    finite = bool(np.isfinite(h_final).all())
-    min_depth = float(h_final.min()) if h_final.size else 0.0
+    finite, min_depth, fail_reasons = check_state_health(h_final, min_depth_tol=-1e-6)
 
     injected = _injected_volume(spec)
-    volume_drift_rel = (
-        abs(result.volume_final_m3 - injected) / injected if injected > 0.0 else float("inf")
-    )
+    drift_rel = volume_drift_rel(result.volume_final_m3, injected)
 
     gauges = _load_gauges(spec.gauges_path)
     zb = _bed_grid(spec)
@@ -497,13 +492,8 @@ def _evaluate_case(
         (d for d, far in zip(point_depths, far_column, strict=True) if far), default=0.0
     )
 
-    fail_reasons: list[str] = []
-    if not finite:
-        fail_reasons.append("h_final_non_finite")
-    if min_depth < -1e-6:
-        fail_reasons.append(f"negative_depth:{min_depth:.3e}")
-    if volume_drift_rel > GATE_VOLUME_DRIFT_REL:
-        fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
+    if drift_rel > GATE_VOLUME_DRIFT_REL:
+        fail_reasons.append(f"volume_drift_rel:{drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
     if max_above_sill > GATE_ABOVE_SILL_M:
         fail_reasons.append(
             f"pond_above_sill:{max_above_sill:.3f}>{GATE_ABOVE_SILL_M} "
@@ -525,7 +515,7 @@ def _evaluate_case(
     return CaseMetrics(
         case=spec.name,
         backend=backend,
-        volume_drift_rel=volume_drift_rel,
+        volume_drift_rel=drift_rel,
         min_depth_m=min_depth,
         ponded_count=sum(wet),
         max_above_sill_m=max_above_sill,

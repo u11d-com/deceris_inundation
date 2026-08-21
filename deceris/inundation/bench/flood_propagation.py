@@ -53,9 +53,14 @@ import numpy as np
 from deceris.inundation.bench.common import (
     RadialInflowSolution,
     build_channel_mesh,
+    check_state_health,
+    l1_relative_error,
+    max_relative_error,
+    nearest_cell_indices,
     resample_snapshots_uniform,
     save_depth_gif,
     solve_radial_inflow,
+    volume_drift_rel,
     write_mesh_parquet,
 )
 from deceris.inundation.tuning import GRAVITY_G
@@ -420,12 +425,7 @@ def _gauge_cells(workflow: SWEWorkflow, gauges: NDArray[np.float64]) -> NDArray[
     """Solver cell nearest each published output point."""
     if workflow.geom is None:
         raise RuntimeError("workflow must be prepared")
-    cx = workflow.geom.centroid[:, 0].astype(np.float64)
-    cy = workflow.geom.centroid[:, 1].astype(np.float64)
-    nearest = np.empty(gauges.shape[0], dtype=np.int64)
-    for k, (gx, gy) in enumerate(gauges):
-        nearest[k] = int(np.argmin((cx - gx) ** 2 + (cy - gy) ** 2))
-    return nearest
+    return nearest_cell_indices(workflow.geom.centroid[:, 0], workflow.geom.centroid[:, 1], gauges)
 
 
 def _arrival_times(
@@ -437,14 +437,6 @@ def _arrival_times(
         wet = np.asarray(snap, dtype=np.float32)[cells] > WET_TOL_M
         arrival[wet & ~np.isfinite(arrival)] = t
     return arrival
-
-
-def _max_rel_error(actual: NDArray[np.float64], reference: NDArray[np.float64]) -> float:
-    """Largest relative error over entries where both values are finite and positive."""
-    usable = np.isfinite(actual) & np.isfinite(reference) & (reference > 0.0)
-    if not bool(usable.any()):
-        return float("inf")
-    return float((np.abs(actual[usable] - reference[usable]) / reference[usable]).max())
 
 
 def _evaluate_case(
@@ -459,18 +451,15 @@ def _evaluate_case(
     radii = _gauge_radii(gauges)
 
     h_final = np.asarray(result.h_final, dtype=np.float32)
-    finite = bool(np.isfinite(h_final).all())
-    min_depth = float(h_final.min()) if h_final.size else 0.0
+    finite, min_depth, fail_reasons = check_state_health(h_final, min_depth_tol=-1e-6)
 
     injected = _injected_volume(spec)
-    volume_drift_rel = (
-        abs(result.volume_final_m3 - injected) / injected if injected > 0.0 else float("inf")
-    )
+    drift_rel = volume_drift_rel(result.volume_final_m3, injected)
 
     cells = _gauge_cells(workflow, gauges)
     arrival = _arrival_times(result.snap_times, result.snapshots, cells)
     arrival_ref = reference.arrival_at(radii)
-    max_arrival_err = _max_rel_error(arrival, arrival_ref)
+    max_arrival_err = max_relative_error(arrival, arrival_ref)
 
     probe_workflow, probe_result = probe
     probe_cells = _gauge_cells(probe_workflow, gauges)
@@ -490,8 +479,8 @@ def _evaluate_case(
     # Point 1 sits only 5 source-radii out, where the line-vs-disc idealisation
     # of the inflow still shows; the profile norms use points 2-6.
     far = radii >= 100.0
-    depth_l1 = float(np.abs(h_probe[far] - h_ref[far]).sum() / np.abs(h_ref[far]).sum())
-    speed_l1 = float(np.abs(speed_probe[far] - speed_ref[far]).sum() / np.abs(speed_ref[far]).sum())
+    depth_l1 = l1_relative_error(h_probe[far], h_ref[far])
+    speed_l1 = l1_relative_error(speed_probe[far], speed_ref[far])
 
     # Isotropy: point 6 is the only off-axis gauge, so compare its depth error
     # with the worst axis-gauge error at the same probe time.
@@ -505,13 +494,8 @@ def _evaluate_case(
     )
     isotropy_excess = diag_err - axis_err
 
-    fail_reasons: list[str] = []
-    if not finite:
-        fail_reasons.append("h_final_non_finite")
-    if min_depth < -1e-6:
-        fail_reasons.append(f"negative_depth:{min_depth:.3e}")
-    if volume_drift_rel > GATE_VOLUME_DRIFT_REL:
-        fail_reasons.append(f"volume_drift_rel:{volume_drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
+    if drift_rel > GATE_VOLUME_DRIFT_REL:
+        fail_reasons.append(f"volume_drift_rel:{drift_rel:.3e}>{GATE_VOLUME_DRIFT_REL:.0e}")
     if not np.isfinite(arrival).all():
         dry = [int(k) + 1 for k, a in enumerate(arrival) if not np.isfinite(a)]
         fail_reasons.append(f"gauges_never_wetted:{dry}")
@@ -534,7 +518,7 @@ def _evaluate_case(
         backend=backend,
         volume_final_m3=float(result.volume_final_m3),
         volume_injected_m3=injected,
-        volume_drift_rel=volume_drift_rel,
+        volume_drift_rel=drift_rel,
         min_depth_m=min_depth,
         h_final_finite=finite,
         gauge_radii_m=[float(r) for r in radii],

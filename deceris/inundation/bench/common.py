@@ -119,6 +119,98 @@ def validate_run_invariants(
     return True, "ok"
 
 
+# ── Gate primitives (pure: arrays and scalars only, no solver objects) ──────
+# The harnesses' _evaluate_case functions take a live SWEWorkflow, so they can
+# only run behind a GPU and cannot be unit-tested. These are the pieces that
+# every harness repeats; keeping them free of solver objects is what makes the
+# scoring logic testable on a clean checkout.
+
+
+def nearest_cell_indices(
+    cx: NDArray[np.floating[Any]],
+    cy: NDArray[np.floating[Any]],
+    points: NDArray[np.floating[Any]],
+) -> NDArray[np.int64]:
+    """Index of the cell centroid nearest each ``(x, y)`` in ``points``."""
+    cx64 = np.asarray(cx, dtype=np.float64)
+    cy64 = np.asarray(cy, dtype=np.float64)
+    pts = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if cx64.shape != cy64.shape:
+        raise ValueError(f"cx and cy must match, got {cx64.shape} and {cy64.shape}")
+    if cx64.size == 0:
+        raise ValueError("no cell centroids given")
+    nearest = np.empty(pts.shape[0], dtype=np.int64)
+    for k, (px, py) in enumerate(pts):
+        nearest[k] = int(np.argmin((cx64 - px) ** 2 + (cy64 - py) ** 2))
+    return nearest
+
+
+def volume_drift_rel(volume_final_m3: float, volume_reference_m3: float) -> float:
+    """Relative volume drift; ``inf`` when the reference is non-positive.
+
+    The guard matters: a case whose reference volume is zero (nothing injected,
+    nothing initially present) must fail its mass gate rather than divide by
+    zero and report a spurious pass.
+    """
+    if not volume_reference_m3 > 0.0:
+        return float("inf")
+    return abs(volume_final_m3 - volume_reference_m3) / volume_reference_m3
+
+
+def check_state_health(
+    h_final: NDArray[np.floating[Any]], *, min_depth_tol: float = 0.0
+) -> tuple[bool, float, list[str]]:
+    """Finiteness + positivity of a final depth field.
+
+    Returns ``(finite, min_depth, fail_reasons)``. ``min_depth_tol`` is the
+    most negative depth tolerated: 0.0 for the frictionless analytical cases,
+    a small negative for the wetting/drying ones where the clamp can leave
+    round-off below zero.
+    """
+    h = np.asarray(h_final)
+    finite = bool(np.isfinite(h).all())
+    min_depth = float(h.min()) if h.size else 0.0
+    reasons: list[str] = []
+    if not finite:
+        reasons.append("h_final_non_finite")
+    if min_depth < min_depth_tol:
+        reasons.append(f"negative_depth:{min_depth:.3e}")
+    return finite, min_depth, reasons
+
+
+def l1_relative_error(
+    actual: NDArray[np.floating[Any]], reference: NDArray[np.floating[Any]]
+) -> float:
+    """``sum|actual - reference| / sum|reference|``; ``inf`` if the reference is zero."""
+    a = np.asarray(actual, dtype=np.float64)
+    r = np.asarray(reference, dtype=np.float64)
+    if a.shape != r.shape:
+        raise ValueError(f"shape mismatch: {a.shape} vs {r.shape}")
+    denom = float(np.abs(r).sum())
+    if denom <= 0.0:
+        return float("inf")
+    return float(np.abs(a - r).sum() / denom)
+
+
+def max_relative_error(
+    actual: NDArray[np.floating[Any]], reference: NDArray[np.floating[Any]]
+) -> float:
+    """Largest relative error where both values are finite and the reference positive.
+
+    Entries the simulation never reached (``inf``) are skipped rather than
+    poisoning the reduction; ``inf`` is returned only when nothing is
+    comparable at all.
+    """
+    a = np.asarray(actual, dtype=np.float64)
+    r = np.asarray(reference, dtype=np.float64)
+    if a.shape != r.shape:
+        raise ValueError(f"shape mismatch: {a.shape} vs {r.shape}")
+    usable = np.isfinite(a) & np.isfinite(r) & (r > 0.0)
+    if not bool(usable.any()):
+        return float("inf")
+    return float((np.abs(a[usable] - r[usable]) / r[usable]).max())
+
+
 def build_fingerprint(
     run_index: int,
     solver_impl: str,
