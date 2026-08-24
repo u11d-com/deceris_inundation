@@ -7,16 +7,17 @@ and reproducible analytical benchmarks.
 
 ## Current evidence
 
-The Stoker, Ritter, radial dam-break, floodplain-depression, flood-propagation,
-and corrected lake-at-rest gates pass with the MoltenVK reference. The
-hydrostatic interface correction removes the still-water obstruction leak.
+All retained analytical and EA gates pass with the MoltenVK reference. Grid
+convergence shows expected profile order and confirms Test 4 front bias shrinks
+with resolution. Its mass drift is a difference of opposing terms rather than a
+single bounded error.
 
 ## Priorities
 
-1. Run a grid-convergence study for the flood-propagation front bias and mass
-   drift, including float64 reporting.
-2. Retune the momentum-obstruction release so genuine momentum overtops the sill
-   without weakening its passing still-water control.
+1. Instrument volume added by the positivity clamp and infer the remaining sink
+   by difference at existing convergence levels.
+2. Use the isolated sink scaling to decide whether a float64 state comparison
+   is warranted.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
 ## Invariants

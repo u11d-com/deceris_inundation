@@ -18,11 +18,11 @@ speed [m/s]         .399   .232   .142   .110   .094   .091
 reference speed     .390   .233   .144   .112   .095   .093
 ```
 
-The front is systematically 4–6% early, consistent with coarse wetting-front
-diffusion. The off-axis gauge performs at least as well as aligned gauges.
-127,520 steps completed in 65.9 s on the Apple GPU through MoltenVK.
+The front is systematically 4–6% early at the five-metre specification grid.
+Effort 19 shows the arrival error falling 0.208, 0.107, 0.063, and 0.025 under
+successive refinement, with observed order 0.99. The bias is spatial
+discretization error.
 
-Mass drift worsens under spatial and timestep refinement rather than shrinking,
-consistent with float32 increment absorption. This remains a measured
-hypothesis until a float64 state comparison is available; the 1e-3 gate applies
-to this configuration only.
+Mass drift is the difference of opposing terms. The positivity clamp supplies
+mass at wet/dry margins; the sink remains unidentified. Instrument the clamp
+before attributing the remainder or extrapolating this configuration.

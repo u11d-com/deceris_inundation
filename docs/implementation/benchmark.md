@@ -9,3 +9,4 @@
 | Momentum obstruction | passing | Release overtops while still-water control remains dry | [`16-momentum-obstruction/`](16-momentum-obstruction/results.md) |
 | Hydrostatic correction | done | Lake-at-rest currents reduced below 1e-4 m/s | [`17-audusse-well-balance-correction/`](17-audusse-well-balance-correction/results.md) |
 | Flood propagation | passing | Arrival, depth, speed, and isotropy gates pass | [`18-flood-propagation/`](18-flood-propagation/results.md) |
+| Grid convergence | done | Expected profile order; mass budget contains opposing terms | [`19-grid-convergence/`](19-grid-convergence/results.md) |

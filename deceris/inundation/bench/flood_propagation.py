@@ -129,19 +129,24 @@ WET_TOL_M = 0.01  # front definition, shared by solver and reference
 
 # ── Correctness gates ───────────────────────────────────────────────────────
 # Closed domain (reflective walls) started dry + a volume-conserving source
-# schedule, so the final volume should equal the injected volume. It does not:
-# this case sits on a float32 precision floor. Measured 2.9e-4 over the 5 h
-# run, and — counter-intuitively — refinement makes it *worse*, 4.5x when dt
-# halves and 19x (sign-flipped) when dx halves, then saturating. That is the
-# signature of per-step increments dt*dh falling below eps*h and being
-# absorbed by the float32 add, not of truncation error, which would shrink.
-# The gate therefore brackets the spec configuration only; see
-# docs/implementation/18-flood-propagation/results.md before refining.
+# schedule, so the final volume should equal the injected volume. It does not,
+# and the residual is not one error but two of opposite sign whose balance
+# flips with both mesh and stopping time (+2.07 m^3 at dx=10 m/t=2 h against
+# -38.98 m^3 at dx=5 m/t=2 h). The positive term is the `max(h_new, 0.0)`
+# positivity clamp in vulkan/shaders/update.py, which fires at the wet/dry
+# margin and can only add mass; the negative term is not identified. Refinement
+# makes the aggregate worse because both terms accumulate over steps and the
+# CFL-bound step count grows as 1/dx. The gate therefore brackets the spec
+# configuration only, and its smallness there is a cancellation rather than a
+# bound — see docs/implementation/19-grid-convergence/results.md before
+# refining or reading anything into this number.
 GATE_VOLUME_DRIFT_REL = 1e-3
 # Front celerity: the headline quantity of this test. Relative error of the
 # arrival time at each published gauge against the axisymmetric reference.
 # Measured 0.063 (the solver runs systematically ~5-6% fast); the reference
 # carries ~1.5% of its own discretisation error and snapshots resolve 60 s.
+# Effort 19 established this is discretisation error, converging at first order
+# (0.208 -> 0.025 as dx goes 20 -> 2.5 m), not a bias in the scheme.
 GATE_ARRIVAL_ERR_REL = 0.10
 # Depth and speed agreement at the probe time, relative to the reference's own
 # scale over the gauges used. Measured 0.026 and 0.013.
