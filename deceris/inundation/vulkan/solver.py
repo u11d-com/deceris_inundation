@@ -54,7 +54,10 @@ def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: in
 
 
 def _pc_update(nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float) -> list[float]:
-    return [float(nc), float(dt), float(stage), float(g), float(dry_tol), float(cfl)]
+    # Emission order must match the GLSL push-constant struct
+    # {num_cells, dt, g, dry_tol, cfl_number, stage}, which is not the argument
+    # order — `stage` is declared last in the shader.
+    return [float(nc), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
 
 
 def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list[float]:
