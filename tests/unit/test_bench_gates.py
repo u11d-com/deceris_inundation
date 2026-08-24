@@ -17,6 +17,7 @@ from deceris.inundation.bench.common import (
     l1_relative_error,
     max_relative_error,
     nearest_cell_indices,
+    observed_order,
     volume_drift_rel,
 )
 
@@ -127,3 +128,48 @@ class TestMaxRelativeError:
     def test_rejects_shape_mismatch(self) -> None:
         with pytest.raises(ValueError, match="shape mismatch"):
             max_relative_error(np.array([1.0, 2.0]), np.array([1.0]))
+
+
+class TestObservedOrder:
+    def test_recovers_a_clean_first_order_sequence(self) -> None:
+        dx = [8.0, 4.0, 2.0, 1.0]
+        fit = observed_order(dx, [0.5 * h for h in dx])
+        assert fit.order == pytest.approx(1.0)
+        assert fit.pairwise_orders == pytest.approx([1.0, 1.0, 1.0])
+        assert fit.monotone
+
+    def test_recovers_second_order(self) -> None:
+        dx = [4.0, 2.0, 1.0]
+        fit = observed_order(dx, [h**2 for h in dx])
+        assert fit.order == pytest.approx(2.0)
+
+    def test_pairwise_orders_expose_a_flattening_curve(self) -> None:
+        # First order down to a floor: the fitted slope averages the two regimes
+        # away, the pairwise sequence is what shows the knee.
+        fit = observed_order([8.0, 4.0, 2.0, 1.0], [8e-3, 4e-3, 2.05e-3, 2.0e-3])
+        assert fit.pairwise_orders[0] == pytest.approx(1.0, abs=0.01)
+        assert fit.pairwise_orders[-1] < 0.1
+        assert fit.monotone
+
+    def test_a_rising_error_is_reported_as_non_monotone(self) -> None:
+        # The float32-floor signature: refinement makes it worse.
+        fit = observed_order([8.0, 4.0, 2.0], [1e-5, 4e-5, 8e-4])
+        assert not fit.monotone
+        assert fit.order < 0.0
+
+    def test_rejects_a_single_level(self) -> None:
+        with pytest.raises(ValueError, match="at least two"):
+            observed_order([1.0], [1.0])
+
+    def test_rejects_dx_not_ordered_coarse_to_fine(self) -> None:
+        with pytest.raises(ValueError, match="strictly decreasing"):
+            observed_order([1.0, 2.0], [1.0, 2.0])
+
+    def test_rejects_non_positive_errors(self) -> None:
+        # A zero error has no logarithm; the caller must skip that metric.
+        with pytest.raises(ValueError, match="finite and positive"):
+            observed_order([2.0, 1.0], [1e-3, 0.0])
+
+    def test_rejects_shape_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="shape mismatch"):
+            observed_order([4.0, 2.0, 1.0], [1.0, 2.0])

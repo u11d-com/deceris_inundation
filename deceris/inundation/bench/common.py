@@ -211,6 +211,45 @@ def max_relative_error(
     return float((np.abs(a[usable] - r[usable]) / r[usable]).max())
 
 
+@dataclass(frozen=True)
+class ConvergenceFit:
+    """Observed order of accuracy of an error metric under mesh refinement."""
+
+    order: float
+    pairwise_orders: list[float]
+    monotone: bool
+
+
+def observed_order(dx: Sequence[float], error: Sequence[float]) -> ConvergenceFit:
+    """Fit ``error ~ dx**p`` over a refinement sequence given coarse-to-fine.
+
+    ``order`` is the least-squares slope of ``log(error)`` against ``log(dx)``;
+    ``pairwise_orders`` is the same ratio taken between consecutive levels, which
+    is what exposes a curve that starts at the scheme's order and then flattens.
+    ``monotone`` is the load-bearing one: truncation error must fall under
+    refinement, so a level where it does not is evidence of a non-discretisation
+    error floor regardless of what the fitted slope says.
+    """
+    h = np.asarray(dx, dtype=np.float64)
+    e = np.asarray(error, dtype=np.float64)
+    if h.shape != e.shape:
+        raise ValueError(f"shape mismatch: {h.shape} vs {e.shape}")
+    if h.size < 2:
+        raise ValueError("need at least two refinement levels")
+    if not bool(np.all(np.diff(h) < 0.0)):
+        raise ValueError("dx must be strictly decreasing (coarse to fine)")
+    if not bool(np.all(np.isfinite(e) & (e > 0.0))):
+        raise ValueError("errors must be finite and positive to fit an order")
+    log_h, log_e = np.log(h), np.log(e)
+    pairwise = np.diff(log_e) / np.diff(log_h)
+    slope = float(np.polyfit(log_h, log_e, 1)[0])
+    return ConvergenceFit(
+        order=slope,
+        pairwise_orders=[float(p) for p in pairwise],
+        monotone=bool(np.all(np.diff(e) < 0.0)),
+    )
+
+
 def build_fingerprint(
     run_index: int,
     solver_impl: str,
