@@ -23,6 +23,7 @@ Effort 19 shows the arrival error falling 0.208, 0.107, 0.063, and 0.025 under
 successive refinement, with observed order 0.99. The bias is spatial
 discretization error.
 
-Mass drift is the difference of opposing terms. The positivity clamp supplies
-mass at wet/dry margins; the sink remains unidentified. Instrument the clamp
-before attributing the remainder or extrapolating this configuration.
+Mass drift is a single signed error whose sign changes with mesh and stopping
+time. The positivity clamp was instrumented and contributes exactly zero; the
+remaining float32 arithmetic hypothesis needs a float64 reference. See
+[`../19-grid-convergence/results.md`](../19-grid-convergence/results.md).

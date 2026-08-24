@@ -11,11 +11,15 @@ The sweep ran on macOS/MoltenVK through `gpu_resident_batch`.
 | Flood propagation | Speed L1 | 8.49e-2, 3.52e-2, 1.26e-2, 3.67e-3 | 1.51 | yes |
 | Flood propagation | Arrival | 2.08e-1, 1.07e-1, 6.26e-2, 2.52e-2 | 0.99 | yes |
 
-Smooth propagation converges at roughly first order; discontinuous cases show
-the expected lower L1 order. The Test 4 front over-speed is therefore spatial
-discretization error, not a persistent bias.
+The scheme converges at the expected order for a first-order method: smooth
+propagation is roughly first order, while discontinuous cases have lower L1
+order. The Test 4 front over-speed is spatial discretization error, not a
+persistent bias.
 
-## Mass budget
+The mass drift is a single signed error, not a two-term budget. The positivity
+clamp was instrumented and contributes exactly zero at every measured
+configuration; the remaining float32 arithmetic hypothesis needs a float64
+reference.
 
 | dx | Cells | Final minus injected volume |
 | ---: | ---: | ---: |
@@ -25,10 +29,9 @@ discretization error, not a persistent bias.
 | 2.5 m | 320,000 | +120.6 m³ |
 
 The sign also changes with stopping time: at two hours the 5 m case is
--38.98 m³, while at five hours it is +83.4 m³. At least two opposing terms are
-present. The positivity clamp is the identified positive source; the sink
-remains unidentified. Float32 output reduction error is at most 2.7e-7 and is
-ruled out.
+-38.98 m³, while at five hours it is +83.4 m³. The clamp measurement shows
+exactly zero contribution in both cases, so this is a single signed error.
+Float32 output reduction error is at most 2.7e-7 and is ruled out.
 
-Next: instrument clamp-created volume directly, infer the sink by difference,
-and only then decide whether a float64 state comparison is warranted.
+Next: build a float64 state reference to test the remaining arithmetic
+hypothesis.

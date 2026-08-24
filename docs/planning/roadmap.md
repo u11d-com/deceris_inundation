@@ -9,15 +9,14 @@ and reproducible analytical benchmarks.
 
 All retained analytical and EA gates pass with the MoltenVK reference. Grid
 convergence shows expected profile order and confirms Test 4 front bias shrinks
-with resolution. Its mass drift is a difference of opposing terms rather than a
-single bounded error.
+with resolution. Its mass drift changes sign with mesh and stopping time; the
+positivity clamp contributes exactly zero.
+
 
 ## Priorities
 
-1. Instrument volume added by the positivity clamp and infer the remaining sink
-   by difference at existing convergence levels.
-2. Use the isolated sink scaling to decide whether a float64 state comparison
-   is warranted.
+1. Build a float64 state reference for the measured mass-drift cases.
+2. Use the reference to distinguish float32 arithmetic from discretization.
 3. Optimize only after a measured Vulkan bottleneck identifies a useful target.
 
 ## Invariants

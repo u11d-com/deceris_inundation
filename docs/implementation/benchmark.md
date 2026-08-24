@@ -8,5 +8,5 @@
 | Floodplain depressions | passing | Published terrain storage and reach gates pass | [`15-floodplain-depressions/`](15-floodplain-depressions/results.md) |
 | Momentum obstruction | passing | Release overtops while still-water control remains dry | [`16-momentum-obstruction/`](16-momentum-obstruction/results.md) |
 | Hydrostatic correction | done | Lake-at-rest currents reduced below 1e-4 m/s | [`17-audusse-well-balance-correction/`](17-audusse-well-balance-correction/results.md) |
-| Flood propagation | passing | Arrival, depth, speed, and isotropy gates pass | [`18-flood-propagation/`](18-flood-propagation/results.md) |
-| Grid convergence | done | Expected profile order; mass budget contains opposing terms | [`19-grid-convergence/`](19-grid-convergence/results.md) |
+| Flood propagation | passing | Arrival, depth, speed, and isotropy gates pass; mass drift is a single signed error and the clamp contributes zero | [`18-flood-propagation/`](18-flood-propagation/results.md) |
+| Grid convergence | done | Expected profile order; front bias is discretization error; mass drift changes sign and the clamp contributes zero | [`19-grid-convergence/`](19-grid-convergence/results.md) |
