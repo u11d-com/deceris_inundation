@@ -53,11 +53,21 @@ def _pc_flux(ne: int, dt: float, g: float, dry_tol: float, cfl: float, stage: in
     return [float(ne), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
 
 
-def _pc_update(nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float) -> list[float]:
+def _pc_update(
+    nc: int, dt: float, stage: int, g: float, dry_tol: float, cfl: float, track_clamp: bool = False
+) -> list[float]:
     # Emission order must match the GLSL push-constant struct
-    # {num_cells, dt, g, dry_tol, cfl_number, stage}, which is not the argument
-    # order — `stage` is declared last in the shader.
-    return [float(nc), float(dt), float(g), float(dry_tol), float(cfl), float(stage)]
+    # {num_cells, dt, g, dry_tol, cfl_number, stage, track_clamp}, which is not
+    # the argument order — `stage` is declared second-to-last in the shader.
+    return [
+        float(nc),
+        float(dt),
+        float(g),
+        float(dry_tol),
+        float(cfl),
+        float(stage),
+        1.0 if track_clamp else 0.0,
+    ]
 
 
 def _pc_cfl_accum(ne: int, g: float, dry_tol: float, cfl: float) -> list[float]:
@@ -119,6 +129,8 @@ class SWESolver:
         self._dry_tol = float(dry_tol)
         self._cfl = float(cfl)
         self._work_group_size = workgroup_size
+        # Opt-in: costs one extra buffer write per cell per RK stage.
+        self.track_clamp = False
 
         self._h0 = h0.astype(np.float32)
         self._hu0 = hu0.astype(np.float32)
@@ -189,6 +201,10 @@ class SWESolver:
         self.t_dtbuf = g(np.array([self._SENTINEL_F], dtype=np.float32))
         # Dedicated CFL scratch buffer (binding 18) — decouples CFL from flux dh[]
         self.t_cfl_scratch = g(np.zeros(self.N, dtype=np.float32))
+        # Per-cell positivity-clamp mass, only written when the diagnostic is
+        # enabled. Per-cell rather than one global accumulator so each cell's
+        # history stays small enough not to absorb its own increments.
+        self.t_clamp_mass = g(np.zeros(self.N, dtype=np.float32))
 
         self._all_tensors = [
             self.t_h,
@@ -211,7 +227,12 @@ class SWESolver:
             self.t_dtbuf,
             self.t_cfl_scratch,
         ]
-        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._all_tensors)).eval()
+        # Binding 19 is claimed per-shader, not globally: the update kernels see
+        # clamp_mass there, while the time-advance kernel sees its own time_buf.
+        # Appending to _all_tensors instead would silently renumber whichever
+        # tensor a subclass appends for its own binding 19.
+        self._update_tensors = [*self._all_tensors, self.t_clamp_mass]
+        self._mgr.sequence().record(kp.OpTensorSyncDevice(self._update_tensors)).eval()
 
     def _build_algorithms(self, spv: dict[str, bytes]) -> None:
         N, E = self.N, self.E
@@ -226,7 +247,7 @@ class SWESolver:
             push_consts=_pc_flux(E, 0.0, g, dt, self._cfl, 0),
         )
         self._algo_update = self._mgr.algorithm(
-            self._all_tensors,
+            self._update_tensors,
             spv["update"],
             workgroup=wg_c,
             spec_consts=[],
@@ -343,6 +364,19 @@ class SWESolver:
     def _reset_to_initial(self) -> None:
         """Restore the initial condition, momentum included, for a fresh run."""
         self.reset(self._h0, self._hu0, self._hv0)
+
+    def reset_clamp_mass(self) -> None:
+        """Zero the positivity-clamp accumulator."""
+        self._upload(self.t_clamp_mass, np.zeros(self.N, dtype=np.float32))
+
+    def download_clamp_mass(self) -> NDArray[np.float32]:
+        """Per-cell volume [m^3] created by the positivity clamp since the last reset.
+
+        Zero unless ``track_clamp`` was set before the run. Summing this gives
+        the clamp's exact contribution to the volume drift, which is otherwise
+        only observable tangled up with the opposing arithmetic loss.
+        """
+        return self._download(self.t_clamp_mass)
 
     def download_h(self) -> NDArray[np.float32]:
         """Download the current water-depth array from the GPU."""
@@ -495,7 +529,9 @@ class SWESolver:
                 kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 0))
             ).eval()
             self._mgr.sequence().record(
-                kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl))
+                kp.OpAlgoDispatch(
+                    self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl, self.track_clamp)
+                )
             ).eval()
 
             # ── Heun stage 1 — corrector ──────────────────────────────────────
@@ -503,7 +539,9 @@ class SWESolver:
                 kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 1))
             ).eval()
             self._mgr.sequence().record(
-                kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl))
+                kp.OpAlgoDispatch(
+                    self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl, self.track_clamp)
+                )
             ).eval()
 
             # ── Source term (GPU kernel — no CPU round-trip) ──────────────────

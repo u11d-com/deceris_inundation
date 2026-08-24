@@ -177,7 +177,9 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
                 )
                 step_seq.record(self._barrier_flux)
                 step_seq.record(
-                    kp.OpAlgoDispatch(self._algo_update, _pc_update(N, step_dt, 0, g, dt_, cfl))
+                    kp.OpAlgoDispatch(
+                        self._algo_update, _pc_update(N, step_dt, 0, g, dt_, cfl, self.track_clamp)
+                    )
                 )
                 step_seq.record(self._barrier_state)
                 step_seq.record(
@@ -185,7 +187,9 @@ class SWESolverFixedDtBatchBarrier(SWESolverFixedDtBatch):
                 )
                 step_seq.record(self._barrier_flux)
                 step_seq.record(
-                    kp.OpAlgoDispatch(self._algo_update, _pc_update(N, step_dt, 1, g, dt_, cfl))
+                    kp.OpAlgoDispatch(
+                        self._algo_update, _pc_update(N, step_dt, 1, g, dt_, cfl, self.track_clamp)
+                    )
                 )
                 step_seq.record(self._barrier_state)
                 if use_gpu_source:

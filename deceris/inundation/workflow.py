@@ -90,6 +90,9 @@ class WorkflowConfig:
     initial_state_source: dict[str, object] | str | os.PathLike[str] | None = None
     initial_state_order: str = "solver"
     initial_state_id_col: str = "cell_id"
+    # Accumulate the mass the positivity clamp creates (Vulkan only). Off by
+    # default: it costs an extra buffer write per cell per RK stage.
+    track_clamp_mass: bool = False
     geometry_cache_dir: str | os.PathLike[str] | None = None
     output_every_steps: int | None = None
     solver_impl: Literal[
@@ -143,6 +146,9 @@ class WorkflowResult:
     # Used to export complete warm starts and score velocity-based benchmarks.
     hu_final: NDArray[np.float32] | None = None
     hv_final: NDArray[np.float32] | None = None
+    # Volume created by the update kernel's positivity clamp over the run.
+    # None unless config.track_clamp_mass is enabled.
+    clamp_mass_m3: float | None = None
 
 
 def select_cells_within_radius(
@@ -497,6 +503,8 @@ class SWEWorkflow:
         self.face_offsets = face_offsets
         self.zb_from_file = zb_from_file
         self.solver = solver
+        if self.config.track_clamp_mass and hasattr(solver, "track_clamp"):
+            solver.track_clamp = True
 
     def run(self, phases: Sequence[SimulationPhase]) -> WorkflowResult:
         """Execute one or more discharge phases and return simulation outputs."""
@@ -565,6 +573,13 @@ class SWEWorkflow:
             cast("NDArray[np.float32]", download_hv()) if callable(download_hv) else None
         )
 
+        download_clamp = getattr(self.solver, "download_clamp_mass", None)
+        clamp_mass_m3: float | None = None
+        if self.config.track_clamp_mass and callable(download_clamp):
+            clamp_mass_m3 = float(
+                np.asarray(cast("NDArray[np.float32]", download_clamp()), dtype=np.float64).sum()
+            )
+
         return WorkflowResult(
             snapshots=snapshots,
             snap_times=snap_times,
@@ -575,6 +590,7 @@ class SWEWorkflow:
             steps_total=int(getattr(self.solver, "steps_total", 0)),
             hu_final=hu_final,
             hv_final=hv_final,
+            clamp_mass_m3=clamp_mass_m3,
         )
 
 

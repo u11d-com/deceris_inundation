@@ -120,13 +120,17 @@ class SWESolverFixedDtBatch(SWESolver):
                     kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, step_dt, g, dt_, cfl, 0))
                 )
                 step_seq.record(
-                    kp.OpAlgoDispatch(self._algo_update, _pc_update(N, step_dt, 0, g, dt_, cfl))
+                    kp.OpAlgoDispatch(
+                        self._algo_update, _pc_update(N, step_dt, 0, g, dt_, cfl, self.track_clamp)
+                    )
                 )
                 step_seq.record(
                     kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, step_dt, g, dt_, cfl, 1))
                 )
                 step_seq.record(
-                    kp.OpAlgoDispatch(self._algo_update, _pc_update(N, step_dt, 1, g, dt_, cfl))
+                    kp.OpAlgoDispatch(
+                        self._algo_update, _pc_update(N, step_dt, 1, g, dt_, cfl, self.track_clamp)
+                    )
                 )
                 if use_gpu_source:
                     step_seq.record(

@@ -1,4 +1,21 @@
-"""Update shader sources for SWE solver."""
+"""Update shader sources for SWE solver.
+
+Both variants carry an optional clamp-mass diagnostic on binding 19. The
+positivity clamp ``max(h_new, 0.0)`` is the solver's only non-conservative
+operation on mass, and it is one-sided, so it shows up as a slow volume gain
+that is otherwise indistinguishable from the arithmetic losses it competes
+with. Accumulating it makes the two separable.
+
+The weight is 0.5 on *both* RK stages, which is exact rather than approximate.
+Writing the clamp deficits as c0 (predictor) and c1 (corrector), and using that
+the flux divergence telescopes to zero over a closed domain:
+
+    sum(A*h1)  = sum(A*h^n) + C0
+    sum(A*h**) = sum(A*h1)  + C1
+    V_{n+1}    = 0.5*(sum(A*h^n) + sum(A*h**)) = V_n + 0.5*(C0 + C1)
+
+so 0.5*(C0 + C1) is precisely the volume the clamp added over the step.
+"""
 
 UPDATE_GLSL = """\
 #version 450
@@ -24,6 +41,7 @@ layout(set=0, binding=15) buffer HV1    { float hv1[];    };
 layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
 layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
+layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
 layout(push_constant) uniform PC {
     float num_cells;
@@ -32,6 +50,7 @@ layout(push_constant) uniform PC {
     float dry_tol;
     float cfl_number;
     float stage;
+    float track_clamp;
 } pc;
 
 void main() {
@@ -55,11 +74,14 @@ void main() {
         hvi = hv1[i];
     }
 
-    float h_new  = hi  - dti * dh[i];
+    float h_raw  = hi  - dti * dh[i];
     float hu_new = hui - dti * dhu[i];
     float hv_new = hvi - dti * dhv[i];
 
-    h_new = max(h_new, 0.0);
+    float h_new = max(h_raw, 0.0);
+    if (pc.track_clamp > 0.5) {
+        clamp_mass[i] += 0.5 * A * (h_new - h_raw);
+    }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
 
     if (h_new >= pc.dry_tol) {
@@ -117,6 +139,7 @@ layout(set=0, binding=15) buffer HV1    { float hv1[];    };
 layout(set=0, binding=16) buffer NMANN  { float n_mann[]; };
 layout(set=0, binding=17) buffer DTBUF  { float dt_buf[]; };
 layout(set=0, binding=18) buffer CFLSC  { float cfl_scratch[]; };
+layout(set=0, binding=19) buffer CLAMPM { float clamp_mass[]; };
 
 layout(push_constant) uniform PC {
     float num_cells;
@@ -125,6 +148,7 @@ layout(push_constant) uniform PC {
     float dry_tol;
     float cfl_number;
     float stage;
+    float track_clamp;
 } pc;
 
 void main() {
@@ -146,11 +170,14 @@ void main() {
         hvi = hv1[i];
     }
 
-    float h_new  = hi  - dti * dh[i];
+    float h_raw  = hi  - dti * dh[i];
     float hu_new = hui - dti * dhu[i];
     float hv_new = hvi - dti * dhv[i];
 
-    h_new = max(h_new, 0.0);
+    float h_new = max(h_raw, 0.0);
+    if (pc.track_clamp > 0.5) {
+        clamp_mass[i] += 0.5 * A * (h_new - h_raw);
+    }
     if (h_new < pc.dry_tol) { hu_new = 0.0; hv_new = 0.0; }
 
     if (h_new >= pc.dry_tol) {

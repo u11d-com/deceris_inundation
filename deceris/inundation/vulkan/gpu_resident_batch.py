@@ -12,7 +12,7 @@ import kp
 import numpy as np
 
 from ..tuning import compute_workgroups
-from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce
+from .solver import SWESolver, _pc_cfl_accum, _pc_cfl_reduce, _pc_update
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -38,11 +38,11 @@ class SWESolverGpuResidentBatch(SWESolver):
             push_consts=[float(E), 0.0, g, dt, self._cfl, 0.0],
         )
         self._algo_update_dtbuf = self._mgr.algorithm(
-            self._all_tensors,
+            self._update_tensors,
             spv["update_dtbuf"],
             workgroup=wg_c,
             spec_consts=[],
-            push_consts=[float(N), 0.0, g, dt, self._cfl, 0.0],
+            push_consts=_pc_update(N, 0.0, 0, g, dt, self._cfl),
         )
         self._build_cfl_algos(spv, N, E, wg_e, wg_c, g, dt)
         self._algo_dt_reset = self._mgr.algorithm(
@@ -191,7 +191,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                 seq.record(
                     kp.OpAlgoDispatch(
                         self._algo_update_dtbuf,
-                        [float(N), 0.0, g, dry_tol, cfl, 0.0],
+                        _pc_update(N, 0.0, 0, g, dry_tol, cfl, self.track_clamp),
                     )
                 )
                 seq.record(self._barrier_state)
@@ -205,7 +205,7 @@ class SWESolverGpuResidentBatch(SWESolver):
                 seq.record(
                     kp.OpAlgoDispatch(
                         self._algo_update_dtbuf,
-                        [float(N), 0.0, g, dry_tol, cfl, 1.0],
+                        _pc_update(N, 0.0, 1, g, dry_tol, cfl, self.track_clamp),
                     )
                 )
                 seq.record(self._barrier_state)

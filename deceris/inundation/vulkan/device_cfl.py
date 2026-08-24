@@ -41,7 +41,7 @@ class SWESolverDeviceCfl(SWESolver):
             push_consts=_pc_flux(E, 0.0, g, dt, self._cfl, 0),
         )
         self._algo_update_dtbuf = self._mgr.algorithm(
-            self._all_tensors,
+            self._update_tensors,
             spv["update_dtbuf"],
             workgroup=wg_c,
             spec_consts=[],
@@ -148,11 +148,15 @@ class SWESolverDeviceCfl(SWESolver):
             step_seq = self._mgr.sequence()
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 0)))
             step_seq.record(
-                kp.OpAlgoDispatch(self._algo_update_dtbuf, _pc_update(N, dt, 0, g, dt_, cfl))
+                kp.OpAlgoDispatch(
+                    self._algo_update_dtbuf, _pc_update(N, dt, 0, g, dt_, cfl, self.track_clamp)
+                )
             )
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 1)))
             step_seq.record(
-                kp.OpAlgoDispatch(self._algo_update_dtbuf, _pc_update(N, dt, 1, g, dt_, cfl))
+                kp.OpAlgoDispatch(
+                    self._algo_update_dtbuf, _pc_update(N, dt, 1, g, dt_, cfl, self.track_clamp)
+                )
             )
             if use_gpu_source:
                 step_seq.record(kp.OpAlgoDispatch(self._require_algo_source(), [float(N), 0.0]))

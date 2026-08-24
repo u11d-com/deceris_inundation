@@ -108,9 +108,17 @@ class SWESolverBatchedSubmit(SWESolver):
 
             step_seq = self._mgr.sequence()
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 0)))
-            step_seq.record(kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl)))
+            step_seq.record(
+                kp.OpAlgoDispatch(
+                    self._algo_update, _pc_update(N, dt, 0, g, dt_, cfl, self.track_clamp)
+                )
+            )
             step_seq.record(kp.OpAlgoDispatch(self._algo_flux, _pc_flux(E, dt, g, dt_, cfl, 1)))
-            step_seq.record(kp.OpAlgoDispatch(self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl)))
+            step_seq.record(
+                kp.OpAlgoDispatch(
+                    self._algo_update, _pc_update(N, dt, 1, g, dt_, cfl, self.track_clamp)
+                )
+            )
 
             if use_gpu_source:
                 step_seq.record(

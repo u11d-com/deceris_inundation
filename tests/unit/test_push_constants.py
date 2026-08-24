@@ -46,6 +46,7 @@ G = 33.0
 DRY_TOL = 44.0
 CFL = 55.0
 STAGE = 1.0  # must stay a valid stage: the shader branches on it
+TRACK_CLAMP = 1.0
 
 # GLSL field name -> the value the helper is expected to place there. The two
 # count fields and the unused-dt alias are spelled differently across shaders
@@ -59,6 +60,7 @@ FIELD_VALUES = {
     "dry_tol": DRY_TOL,
     "cfl_number": CFL,
     "stage": STAGE,
+    "track_clamp": TRACK_CLAMP,
 }
 
 
@@ -83,6 +85,7 @@ class TestPushConstantFieldParsing:
             "dry_tol",
             "cfl_number",
             "stage",
+            "track_clamp",
         ]
 
     def test_rejects_source_without_a_push_constant_block(self) -> None:
@@ -95,8 +98,13 @@ class TestUpdatePushConstants:
 
     @pytest.mark.parametrize("glsl", [UPDATE_GLSL, UPDATE_DTBUF_GLSL])
     def test_matches_the_shader_struct(self, glsl: str) -> None:
-        emitted = _pc_update(int(NUM_ELEMENTS), DT, int(STAGE), G, DRY_TOL, CFL)
+        emitted = _pc_update(int(NUM_ELEMENTS), DT, int(STAGE), G, DRY_TOL, CFL, track_clamp=True)
         assert emitted == expected_layout(glsl)
+
+    def test_clamp_tracking_defaults_off(self) -> None:
+        fields = push_constant_fields(UPDATE_GLSL)
+        emitted = _pc_update(int(NUM_ELEMENTS), DT, 1, G, DRY_TOL, CFL)
+        assert emitted[fields.index("track_clamp")] == 0.0
 
     def test_stage_lands_in_the_slot_the_shader_branches_on(self) -> None:
         # The regression proper: with stage in the wrong slot the shader read
