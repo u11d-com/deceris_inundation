@@ -45,38 +45,81 @@ class SuiteSpec:
     name: str
     module: str
     title: str
+    description: str
     gif_args: tuple[str, ...]
-
 
 SUITES: tuple[SuiteSpec, ...] = (
     SuiteSpec(
         name="dambreak",
         module="deceris.inundation.bench.dambreak",
         title="1D dam-break (Stoker/Ritter analytical)",
+        description=(
+            "Purpose: 1D analytical dam-break regression against the Stoker and Ritter solutions.\n"
+            "Setup: 1000 m × 10 m flat channel with the dam at x=500 m; upstream depth is 10 m, "
+            "and the Stoker downstream depth is 1 m while the Ritter case is dry-bed.\n"
+            "Forcing and runtime: instantaneous dam removal, frictionless/minimal Manning floor, "
+            "20 s run.\n"
+            "Validation: depth-profile, wet-front, volume-conservation, and determinism gates."
+        ),
         gif_args=("--gif",),
     ),
     SuiteSpec(
         name="radial_dambreak",
         module="deceris.inundation.bench.radial_dambreak",
         title="Radial dam-break (axisymmetric FV reference)",
+        description=(
+            "Purpose: circular 2D dam-break regression and Cartesian-grid isotropy check.\n"
+            "Setup: 40 m × 40 m flat square with a centered radius-2.5 m water column; inner "
+            "depth is 2.5 m and outer depth is 0.5 m.\n"
+            "Forcing and runtime: instantaneous collapse over minimal friction, 1.5 s run.\n"
+            "Reference and validation: compared with a fine radial reference using depth-error, "
+            "front-radius, isotropy, volume-conservation, and determinism gates."
+        ),
         gif_args=("--gif", "--gif-2d"),
     ),
     SuiteSpec(
         name="floodplain_depressions",
         module="deceris.inundation.bench.floodplain_depressions",
         title="EA Test 2 — floodplain depressions",
+        description=(
+            "Purpose: EA Test 2 wetting/drying and basin-filling case.\n"
+            "Setup: 2000 m × 2000 m DEM domain at 20 m resolution, initially dry, with Manning "
+            "n=0.03.\n"
+            "Forcing and runtime: western-edge inflow represented by near-boundary volume sources "
+            "following the published hydrograph, 48 h run.\n"
+            "Validation: volume conservation, pond storage and sill behavior, far-column dryness, "
+            "and determinism gates."
+        ),
         gif_args=("--gif",),
     ),
     SuiteSpec(
         name="momentum_obstruction",
         module="deceris.inundation.bench.momentum_obstruction",
         title="EA Test 3 — momentum over an obstruction",
+        description=(
+            "Purpose: EA Test 3 momentum-over-obstruction case.\n"
+            "Setup: 300 m × 100 m DEM domain at 2 m resolution, initially dry, Manning n=0.01, "
+            "with two depressions separated by a crest.\n"
+            "Forcing and runtime: the published hydrograph is represented by near-boundary volume "
+            "sources, 900 s run.\n"
+            "Validation: volume, pond-level, control, and determinism gates. The first pond and "
+            "crest isolation are controls; water retained in the second depression is the momentum "
+            "signature."
+        ),
         gif_args=("--gif",),
     ),
     SuiteSpec(
         name="flood_propagation",
         module="deceris.inundation.bench.flood_propagation",
         title="EA Test 4 — flood-front propagation",
+        description=(
+            "Purpose: EA Test 4 flood-front-speed case.\n"
+            "Setup: 1000 m × 2000 m flat dry domain at 5 m resolution with Manning n=0.05.\n"
+            "Forcing and runtime: western-wall line inflow represented by volume sources following "
+            "the published hydrograph, 5 h run.\n"
+            "Reference and validation: at 2 h, compare with an axisymmetric radial reference for "
+            "arrival time, depth, speed, isotropy, volume conservation, and determinism."
+        ),
         gif_args=("--gif",),
     ),
 )
@@ -192,6 +235,7 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.failed td { background: #ffebe9; }
 details { margin: 0.6rem 0; }
 details > summary { cursor: pointer; color: #57606a; font-size: 0.85rem; }
+.description { margin: 0.5rem 0 1rem; white-space: normal; line-height: 1.5; }
 pre { background: #24292f; color: #d0d7de; padding: 0.8rem; border-radius: 6px;
       overflow-x: auto; font-size: 0.75rem; line-height: 1.4; }
 .gifs { display: flex; flex-wrap: wrap; gap: 1rem; }
@@ -217,6 +261,74 @@ def _fmt_value(value: object) -> str:
         items = cast("list[object]", value)
         return html.escape(", ".join(f"{v:.6g}" if isinstance(v, float) else str(v) for v in items))
     return html.escape(str(value))
+_COLUMN_DESCRIPTIONS = {
+    "suite": "Benchmark suite name.",
+    "status": "Overall suite verdict.",
+    "wall s": "Elapsed wall-clock time for the suite, in seconds.",
+    "cases passed": "Correctness checks passed out of total checks.",
+    "gifs": "Number of generated animations.",
+    "gate": "Named acceptance gate evaluated by the benchmark.",
+    "threshold": "Acceptance limit or target for the gate.",
+    "passed": "Whether this reported check passed.",
+    "case": "Benchmark scenario or sub-case.",
+    "backend": "Solver backend used for the run.",
+    "repeats": "Number of timed solver repeats used for the performance summary.",
+    "median_wall_s": "Median elapsed wall-clock time across timed repeats, in seconds.",
+    "steps_total": "Total solver time steps completed by the timed run.",
+    "steps_per_s": "Solver time steps completed per second of wall-clock time.",
+    "cell_steps_per_s": "Cell updates completed per second of wall-clock time.",
+    "deterministic": "Whether repeated runs produced identical benchmark results.",
+    "determinism_detail": "Explanation of the repeated-run determinism comparison.",
+    "l1_rel": "Relative L1 error against the analytical or reference solution.",
+    "l2_rel": "Relative L2 error against the analytical or reference solution.",
+    "front_rel_err": "Relative error in detected wet/bore-front position against the analytical/reference front.",
+    "isotropy_spread": "Relative spread of radial-front radii across angular sectors.",
+    "volume_drift_rel": "Relative change in conserved water volume over the run.",
+    "min_depth_m": "Minimum simulated water depth, in metres.",
+    "h_final_finite": "Whether all final water-depth values are finite.",
+    "fail_reasons": "Reasons the benchmark gates failed, if any.",
+    "ponded_count": "Number of depressions retaining ponded water above their sills.",
+    "max_above_sill_m": "Maximum water depth above a depression sill, in metres.",
+    "full_basin_count": "Number of depressions filled to their measured basin capacity.",
+    "full_basin_capacity_rel": "Relative capacity error for depressions classified as full.",
+    "ponded_storage_frac": "Fraction of injected volume retained in pond storage.",
+    "far_column_max_depth_m": "Maximum water depth in the far column away from the inflow, in metres.",
+    "point_depths_m": "Water depths at the configured depression probe points, in metres.",
+    "sill_depths_m": "Water depths at the configured depression sill points, in metres.",
+    "crest_z_m": "Obstruction crest elevation, in metres.",
+    "point1_depth_m": "Water depth at the first obstruction probe point, in metres.",
+    "point1_wse_m": "Water-surface elevation at the first obstruction probe point, in metres.",
+    "crest_depth_m": "Water depth at the obstruction crest, in metres.",
+    "point2_depth_m": "Second depression depth whose ponding is the momentum-over-crest signature, in metres.",
+    "point2_wse_m": "Water-surface elevation at the second obstruction probe point, in metres.",
+    "control_point2_depth_m": "Water depth at the dry control point corresponding to the second probe, in metres.",
+    "left_ponded": "Whether the left obstruction-side depression is ponded.",
+    "ponds_disconnected": "Whether the two obstruction-side ponds remain hydraulically disconnected.",
+    "point2_risen": "Whether the second obstruction probe shows the expected risen water level.",
+    "control_dry": "Whether the obstruction control point remains dry.",
+    "volume_final_m3": "Final simulated water volume, in cubic metres.",
+    "volume_injected_m3": "Water volume injected by the propagation source, in cubic metres.",
+    "gauge_radii_m": "Radial distances of the propagation gauges from the source, in metres.",
+    "arrival_s": "Simulated arrival times at the propagation gauges, in seconds.",
+    "arrival_ref_s": "Reference radial arrival times at the propagation gauges, in seconds.",
+    "max_arrival_err_rel": "Maximum relative gauge-arrival-time error against the axisymmetric radial reference.",
+    "probe_depth_m": "Simulated water depths at propagation probes, in metres.",
+    "probe_depth_ref_m": "Reference water depths at propagation probes, in metres.",
+    "depth_l1_rel": "Relative L1 error of propagation-probe depths against the reference.",
+    "probe_speed_ms": "Simulated propagation speeds at probes, in metres per second.",
+    "probe_speed_ref_ms": "Reference propagation speeds at probes, in metres per second.",
+    "speed_l1_rel": "Relative L1 error of propagation-probe speeds against the reference.",
+    "isotropy_excess_m": "Excess radial-front spread beyond the reference isotropy, in metres.",
+}
+
+
+def _column_header(name: str) -> str:
+    description = _COLUMN_DESCRIPTIONS.get(name, f"Undocumented benchmark field: {name}.")
+    return f'<th title="{html.escape(description, quote=True)}">{html.escape(name)}</th>'
+
+
+
+
 
 
 def _rows_table(rows: list[dict[str, object]]) -> str:
@@ -227,7 +339,7 @@ def _rows_table(rows: list[dict[str, object]]) -> str:
         for key in row:
             if key not in columns:
                 columns.append(key)
-    head = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
+    head = "".join(_column_header(c) for c in columns)
     body_rows: list[str] = []
     for row in rows:
         failed = row.get("passed") is False
@@ -245,7 +357,7 @@ def _mapping_table(mapping: dict[str, object]) -> str:
         f"<tr><td>{html.escape(k)}</td><td class='num'>{_fmt_value(v)}</td></tr>"
         for k, v in mapping.items()
     )
-    return f"<table><thead><tr><th>gate</th><th>threshold</th></tr></thead><tbody>{body}</tbody></table>"
+    return f"<table><thead><tr>{_column_header('gate')}{_column_header('threshold')}</tr></thead><tbody>{body}</tbody></table>"
 
 
 def _as_rows(value: object) -> list[dict[str, object]]:
@@ -272,12 +384,18 @@ def _gif_figure(path: Path) -> str:
     )
 
 
+def _description_details(title: str, description: str) -> str:
+    escaped = html.escape(description).replace("\n", "<br/>")
+    return f"<details><summary>{html.escape(title)}</summary><p class='description'>{escaped}</p></details>"
+
+
 def _suite_section(result: SuiteResult) -> str:
     parts: list[str] = [
         f"<h2 id='{html.escape(result.spec.name)}'>"
         f"{html.escape(result.spec.title)} {_badge(result.status)}</h2>",
         f"<p class='meta'>module <code>{html.escape(result.spec.module)}</code> · "
         f"wall {result.wall_s:.1f} s · exit {result.exit_code}</p>",
+        _description_details("Test description", result.spec.description),
     ]
     if result.summary is not None:
         gates = result.summary.get("gates")
@@ -320,9 +438,9 @@ def _overview_table(pytest_result: PytestResult | None, results: list[SuiteResul
             f"<td>{_badge(r.status)}</td><td class='num'>{r.wall_s:.1f}</td>"
             f"<td class='num'>{cases}</td><td class='num'>{len(r.gif_paths)}</td></tr>"
         )
+    headers = ("suite", "status", "wall s", "cases passed", "gifs")
     return (
-        "<table><thead><tr><th>suite</th><th>status</th><th>wall s</th>"
-        "<th>cases passed</th><th>gifs</th></tr></thead>"
+        f"<table><thead><tr>{''.join(_column_header(c) for c in headers)}</tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
