@@ -68,8 +68,11 @@ from deceris.inundation.bench.common import (
     nearest_cell_indices,
     resample_snapshots_uniform,
     save_depth_gif,
+    save_faceted_line_plot,
     save_profile_gif,
+    speed_from_momentum,
     volume_drift_rel,
+    water_surface_elevation,
     write_mesh_parquet,
 )
 from deceris.inundation.workflow import (
@@ -449,6 +452,7 @@ def _make_workflow(
     output_interval_s: float,
     progress: bool,
     initial_state: dict[str, object] | None = None,
+    capture_momentum_snapshots: bool = False,
 ) -> SWEWorkflow:
     config = WorkflowConfig(
         mesh_source=str(mesh_path),
@@ -458,6 +462,7 @@ def _make_workflow(
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=spec.cfl_interval,
         progress=progress,
+        capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_source=initial_state if initial_state is not None else _initial_state(spec),
         initial_state_order="original",
         solver_impl=backend,
@@ -475,20 +480,14 @@ def _run_once(
     output_interval_s: float,
     progress: bool,
     initial_state: dict[str, object] | None = None,
+    capture_momentum_snapshots: bool = False,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
-        spec,
-        mesh_path,
-        backend,
-        output_interval_s=output_interval_s,
-        progress=progress,
-        initial_state=initial_state,
+        spec, mesh_path, backend, output_interval_s=output_interval_s,
+        progress=progress, initial_state=initial_state,
+        capture_momentum_snapshots=capture_momentum_snapshots,
     )
-    phases = (
-        _hydrograph_phases(spec)
-        if initial_state is None
-        else [SimulationPhase(duration_s=spec.t_end_s, sources=[])]
-    )
+    phases = (_hydrograph_phases(spec) if initial_state is None else [SimulationPhase(duration_s=spec.t_end_s, sources=[])])
     result = workflow.run(phases)
     return workflow, result
 
@@ -682,23 +681,22 @@ def _run_group(
     if args.gif and backend == args.gif_backend:
         safe_frames = _safe_gif_frames(args.gif_frames)
         if safe_frames != args.gif_frames:
-            print(
-                f"[{spec.name}/{backend}] gif frames {args.gif_frames} -> "
-                f"{safe_frames} (float32-safe interval)"
-            )
+            print(f"[{spec.name}/{backend}] gif frames {args.gif_frames} -> {safe_frames}")
         print(f"[{spec.name}/{backend}] extra untimed gif run ({safe_frames} frames)")
         gif_workflow, gif_result = _run_once(
-            spec,
-            mesh_path,
-            backend,
-            output_interval_s=spec.t_end_s / safe_frames,
-            progress=args.solver_progress,
+            spec, mesh_path, backend, output_interval_s=spec.t_end_s / safe_frames,
+            progress=args.solver_progress, capture_momentum_snapshots=True,
         )
-        # The solver snapshots every phase boundary too, so the one-second
-        # hydrograph phases would otherwise crowd the start of the run.
-        gif_snapshots, gif_times = resample_snapshots_uniform(
-            gif_result.snapshots, gif_result.snap_times, safe_frames
-        )
+        cells = np.asarray([_nearest_cell(gif_workflow, spec.point1_xy), _nearest_cell(gif_workflow, spec.point2_xy)], dtype=np.int64)
+        if gif_workflow.geom is None:
+            raise RuntimeError("workflow must be prepared")
+        save_faceted_line_plot(gif_result.snap_times, water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells), ["1", "2"], Path(args.output_dir) / f"test3-water-levels-{backend}.png", ylabel="Water-surface elevation [m]", title="Test 3 obstruction water levels")
+        speed = speed_from_momentum(gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells)
+        if speed is not None:
+            save_faceted_line_plot(gif_result.snap_times, speed, ["1", "2"], Path(args.output_dir) / f"test3-velocities-{backend}.png", ylabel="Speed [m/s]", title="Test 3 obstruction velocities")
+        else:
+            print(f"[{spec.name}/{backend}] WARNING: omitted test3-velocities-{backend}.png; momentum snapshots unavailable")
+        gif_snapshots, gif_times = resample_snapshots_uniform(gif_result.snapshots, gif_result.snap_times, safe_frames)
         save_depth_gif(
             gif_workflow,
             gif_snapshots,

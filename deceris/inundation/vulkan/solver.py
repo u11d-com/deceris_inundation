@@ -407,7 +407,8 @@ class SWESolver:
         source_fn: Callable[[float], NDArray[np.float32]] | None = None,
         resume: bool = False,
         t_start: float = 0.0,
-    ) -> tuple[list[NDArray[np.float32]], list[float]]:
+        capture_momentum_snapshots: bool = False,
+    ) -> tuple[list[NDArray[np.float32]], list[float]] | tuple[list[NDArray[np.float32]], list[float], list[NDArray[np.float32]], list[NDArray[np.float32]]]:
         """Run the Heun RK2 simulation.
 
         Parameters
@@ -477,11 +478,13 @@ class SWESolver:
 
         _t_offset = t_start if resume else 0.0
         if resume:
-            snapshots: list[NDArray[np.float32]] = [self.download_h().copy()]
-            snap_times: list[float] = [t_start]
+            snapshots = [self.download_h().copy()]
+            snap_times = [t_start]
         else:
             snapshots = [self._h0.copy()]
             snap_times = [0.0]
+        hu_snapshots = [self.download_hu().copy()] if capture_momentum_snapshots else []
+        hv_snapshots = [self.download_hv().copy()] if capture_momentum_snapshots else []
         t_sim = _t_offset
         step = 0
         dt = dt_init
@@ -588,9 +591,14 @@ class SWESolver:
 
             if t_sim >= next_output_time:
                 h_snap = self.download_h()
+                hu_snap = self.download_hu().copy() if capture_momentum_snapshots else None
+                hv_snap = self.download_hv().copy() if capture_momentum_snapshots else None
                 if not np.isfinite(h_snap).all():
                     snapshots.append(np.nan_to_num(h_snap, nan=0.0, posinf=0.0).copy())
                     snap_times.append(t_sim)
+                    if hu_snap is not None and hv_snap is not None:
+                        hu_snapshots.append(hu_snap)
+                        hv_snapshots.append(hv_snap)
                     break
                 if progress:
                     _wall_elapsed = _time.monotonic() - _wall_start
@@ -602,11 +610,19 @@ class SWESolver:
                     sys.stdout.flush()
                 snapshots.append(h_snap.copy())
                 snap_times.append(t_sim)
+                if hu_snap is not None and hv_snap is not None:
+                    hu_snapshots.append(hu_snap)
+                    hv_snapshots.append(hv_snap)
                 next_output_time += output_interval_s
 
         h_final = self.download_h()
         if not snapshots or not np.allclose(snapshots[-1], h_final):
             snapshots.append(h_final.copy())
             snap_times.append(t_sim)
+            if capture_momentum_snapshots:
+                hu_snapshots.append(self.download_hu().copy())
+                hv_snapshots.append(self.download_hv().copy())
 
+        if capture_momentum_snapshots:
+            return snapshots, snap_times, hu_snapshots, hv_snapshots
         return snapshots, snap_times

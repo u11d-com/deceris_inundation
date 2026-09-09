@@ -65,7 +65,10 @@ from deceris.inundation.bench.common import (
     nearest_cell_indices,
     resample_snapshots_uniform,
     save_depth_gif,
+    save_depth_png,
+    save_faceted_line_plot,
     volume_drift_rel,
+    water_surface_elevation,
     write_mesh_parquet,
 )
 from deceris.inundation.workflow import (
@@ -388,6 +391,7 @@ def _make_workflow(
     *,
     output_interval_s: float,
     progress: bool,
+    capture_momentum_snapshots: bool = False,
 ) -> SWEWorkflow:
     config = WorkflowConfig(
         mesh_source=str(mesh_path),
@@ -397,6 +401,7 @@ def _make_workflow(
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=spec.cfl_interval,
         progress=progress,
+        capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_source=_initial_state(spec),
         initial_state_order="original",
         solver_impl=backend,
@@ -405,7 +410,6 @@ def _make_workflow(
     workflow.prepare()
     return workflow
 
-
 def _run_once(
     spec: DepressionSpec,
     mesh_path: Path,
@@ -413,9 +417,15 @@ def _run_once(
     *,
     output_interval_s: float,
     progress: bool,
+    capture_momentum_snapshots: bool = False,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
-        spec, mesh_path, backend, output_interval_s=output_interval_s, progress=progress
+        spec,
+        mesh_path,
+        backend,
+        output_interval_s=output_interval_s,
+        progress=progress,
+        capture_momentum_snapshots=capture_momentum_snapshots,
     )
     result = workflow.run(_hydrograph_phases(spec))
     return workflow, result
@@ -623,11 +633,30 @@ def _run_group(
             backend,
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
+            capture_momentum_snapshots=True,
         )
         # The solver snapshots every phase boundary too, so the 91 one-minute
         # hydrograph phases would otherwise crowd the first 3% of the run.
         gif_snapshots, gif_times = resample_snapshots_uniform(
             gif_result.snapshots, gif_result.snap_times, safe_frames
+        )
+        gauges = _load_gauges(spec.gauges_path)
+        cells = _gauge_cells(gif_workflow, gauges)
+        if gif_workflow.geom is None:
+            raise RuntimeError("workflow must be prepared")
+        save_faceted_line_plot(
+            gif_result.snap_times,
+            water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells),
+            [str(i) for i in range(1, len(cells) + 1)],
+            Path(args.output_dir) / f"test2-water-levels-{backend}.png",
+            ylabel="Water-surface elevation [m]",
+            title="Test 2 depression water levels",
+        )
+        save_depth_png(
+            gif_workflow,
+            gif_result.h_final,
+            gif_result.snap_times[-1],
+            Path(args.output_dir) / f"test2-final-inundation-{backend}.png",
         )
         save_depth_gif(
             gif_workflow,

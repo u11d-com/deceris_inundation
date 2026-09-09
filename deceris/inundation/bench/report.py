@@ -135,6 +135,7 @@ class SuiteResult:
     log_text: str
     summary: dict[str, object] | None
     gif_paths: list[Path] = field(default_factory=lambda: list[Path]())
+    graph_paths: list[Path] = field(default_factory=lambda: list[Path]())
 
     @property
     def status(self) -> str:
@@ -191,6 +192,7 @@ def _run_suite(spec: SuiteSpec, output_root: Path, extra_args: list[str]) -> Sui
         log_text=log_text,
         summary=summary,
         gif_paths=sorted(output_dir.glob("*.gif")),
+        graph_paths=sorted(output_dir.glob("*.png")),
     )
     print(
         f"[{spec.name}] {result.status} in {wall_s:.1f} s "
@@ -384,6 +386,16 @@ def _gif_figure(path: Path) -> str:
     )
 
 
+def _png_figure(path: Path) -> str:
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return (
+        f"<figure><img loading='lazy' src='data:image/png;base64,{data}' "
+        f"alt='{html.escape(path.name)}'/>"
+        f"<figcaption>{html.escape(path.name)} ({path.stat().st_size / 1e3:.0f} kB)</figcaption>"
+        f"</figure>"
+    )
+
+
 def _description_details(title: str, description: str) -> str:
     escaped = html.escape(description).replace("\n", "<br/>")
     return f"<details><summary>{html.escape(title)}</summary><p class='description'>{escaped}</p></details>"
@@ -412,6 +424,10 @@ def _suite_section(result: SuiteResult) -> str:
             parts.append(_rows_table(performance))
     else:
         parts.append("<p class='meta'>no summary.json produced — see the log below</p>")
+    if result.graph_paths:
+        parts.append("<h3>Graphs</h3><div class='graphs'>")
+        parts.extend(_png_figure(p) for p in result.graph_paths)
+        parts.append("</div>")
     if result.gif_paths:
         parts.append("<h3>Animations</h3><div class='gifs'>")
         parts.extend(_gif_figure(p) for p in result.gif_paths)

@@ -58,9 +58,14 @@ from deceris.inundation.bench.common import (
     max_relative_error,
     nearest_cell_indices,
     resample_snapshots_uniform,
+    save_depth_contours,
     save_depth_gif,
+    save_faceted_line_plot,
+    save_cross_section,
     solve_radial_inflow,
+    speed_from_momentum,
     volume_drift_rel,
+    water_surface_elevation,
     write_mesh_parquet,
 )
 from deceris.inundation.tuning import GRAVITY_G
@@ -390,6 +395,7 @@ def _run_once(
     t_end_s: float,
     output_interval_s: float,
     progress: bool,
+    capture_momentum_snapshots: bool = False,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     config = WorkflowConfig(
         mesh_source=str(mesh_path),
@@ -399,7 +405,7 @@ def _run_once(
         dt_init=DT_INIT_DEFAULT,
         cfl_interval=spec.cfl_interval,
         progress=progress,
-        initial_state_source=_initial_state(spec),
+        capture_momentum_snapshots=capture_momentum_snapshots,
         initial_state_order="original",
         solver_impl=backend,
     )
@@ -646,12 +652,44 @@ def _run_group(
             t_end_s=spec.t_end_s,
             output_interval_s=spec.t_end_s / safe_frames,
             progress=args.solver_progress,
+            capture_momentum_snapshots=True,
         )
         # The solver snapshots every phase boundary too, so the 60 s hydrograph
         # phases would otherwise dominate the frame list.
         gif_snapshots, gif_times = resample_snapshots_uniform(
             gif_result.snapshots, gif_result.snap_times, safe_frames
         )
+        gauges = _load_gauges(spec.gauges_path)
+        cells = _gauge_cells(gif_workflow, gauges)
+        selected = np.asarray([0, 2, 4, 5], dtype=np.int64)
+        if gif_workflow.geom is None:
+            raise RuntimeError("workflow must be prepared")
+        wse = water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells)
+        save_faceted_line_plot(gif_result.snap_times, wse[:, selected], [str(i + 1) for i in selected], Path(args.output_dir) / f"test4-water-levels-{backend}.png", ylabel="Water level [m]", title="Test 4 flood-front water levels")
+        speed = speed_from_momentum(gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells)
+        if speed is not None:
+            save_faceted_line_plot(gif_result.snap_times, speed[:, selected], [str(i + 1) for i in selected], Path(args.output_dir) / f"test4-velocities-{backend}.png", ylabel="Speed [m/s]", title="Test 4 flood-front velocities")
+        else:
+            print(f"[{spec.name}/{backend}] WARNING: omitted test4-velocities-{backend}.png; momentum snapshots unavailable")
+        times = np.asarray(gif_result.snap_times, dtype=np.float64)
+        picks = [int(np.argmin(abs(times - target))) for target in (3600.0, 10800.0)]
+        grids = []
+        for pick in picks:
+            grid = np.zeros((spec.ny, spec.nx), dtype=np.float64)
+            if gif_workflow.geom is not None:
+                cx = gif_workflow.geom.centroid[:, 0]
+                cy = gif_workflow.geom.centroid[:, 1]
+                col = np.clip((cx / (spec.domain_x_m / spec.nx)).astype(int), 0, spec.nx - 1)
+                row = np.clip((cy / (spec.domain_y_m / spec.ny)).astype(int), 0, spec.ny - 1)
+                grid[row, col] = gif_result.snapshots[pick]
+            grids.append(grid)
+        save_depth_contours(grids, [times[p] for p in picks], Path(args.output_dir) / f"test4-depth-contours-{backend}.png", extent=(0.0, spec.domain_x_m, 0.0, spec.domain_y_m))
+        line_order = np.argsort(gauges[:, 0])
+        distance = gauges[line_order, 0] - gauges[line_order, 0].min()
+        one_hour = picks[0]
+        save_cross_section(distance, gif_result.snapshots[one_hour][cells[line_order]], Path(args.output_dir) / f"test4-depth-cross-section-{backend}.png", ylabel="Depth [m]", title="Test 4 depth cross-section at 1 hour")
+        if speed is not None:
+            save_cross_section(distance, speed[one_hour, line_order], Path(args.output_dir) / f"test4-velocity-cross-section-{backend}.png", ylabel="Speed [m/s]", title="Test 4 velocity cross-section at 1 hour")
         save_depth_gif(
             gif_workflow,
             gif_snapshots,

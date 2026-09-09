@@ -630,6 +630,149 @@ def save_profile_gif(
     sys.stdout.flush()
 
 
+def water_surface_elevation(
+    snapshots: Sequence[NDArray[np.floating[Any]]],
+    bed: NDArray[np.floating[Any]],
+    cells: NDArray[np.integer[Any]],
+) -> NDArray[np.float64]:
+    """Return WSE [m] for ordered gauge cells across snapshot times."""
+    h = np.asarray(snapshots, dtype=np.float64)[:, np.asarray(cells, dtype=np.int64)]
+    return h + np.asarray(bed, dtype=np.float64)[np.asarray(cells, dtype=np.int64)]
+
+
+def speed_from_momentum(
+    hu_snapshots: Sequence[NDArray[np.floating[Any]]] | None,
+    hv_snapshots: Sequence[NDArray[np.floating[Any]]] | None,
+    depth_snapshots: Sequence[NDArray[np.floating[Any]]],
+    cells: NDArray[np.integer[Any]] | None = None,
+    *,
+    dry_floor: float = 1e-9,
+) -> NDArray[np.float64] | None:
+    """Return speed [m/s], or None when momentum snapshots are unavailable."""
+    if hu_snapshots is None or hv_snapshots is None:
+        return None
+    hu = np.asarray(hu_snapshots, dtype=np.float64)
+    hv = np.asarray(hv_snapshots, dtype=np.float64)
+    h = np.asarray(depth_snapshots, dtype=np.float64)
+    speed = np.hypot(hu, hv) / np.maximum(h, dry_floor)
+    return speed if cells is None else speed[:, np.asarray(cells, dtype=np.int64)]
+
+
+def _plot_imports() -> tuple[Any, Any]:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "matplotlib is required for --plot[/-dir]. Install with: "
+            'uv pip install -e ".[viz]" (or pip install -r requirements.txt)'
+        ) from exc
+    return plt, plt
+
+
+def save_line_plot(
+    times_s: Sequence[float],
+    series: Sequence[NDArray[np.floating[Any]]],
+    labels: Sequence[str],
+    out_path: Path,
+    *,
+    ylabel: str,
+    title: str,
+    annotation: str | None = None,
+) -> None:
+    """Write a labeled multi-series line plot."""
+    plt, _ = _plot_imports()
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for values, label in zip(series, labels, strict=True):
+        ax.plot(np.asarray(times_s) / 3600.0, values, label=label)
+    if annotation:
+        ax.axhline(float(annotation), color="black", linestyle="--", label="crest")
+    ax.set_xlabel("Time [hours]")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(alpha=0.25)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def save_faceted_line_plot(
+    times_s: Sequence[float],
+    values: NDArray[np.floating[Any]],
+    labels: Sequence[str],
+    out_path: Path,
+    *,
+    ylabel: str,
+    title: str,
+) -> None:
+    """Write one small-multiple axis per ordered point."""
+    plt, _ = _plot_imports()
+    data = np.asarray(values, dtype=np.float64)
+    fig, axes = plt.subplots(len(labels), 1, figsize=(9, max(3, 2.0 * len(labels))), sharex=True)
+    axes = np.atleast_1d(axes)
+    for ax, row, label in zip(axes, data.T, labels, strict=True):
+        ax.plot(np.asarray(times_s) / 3600.0, row)
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"Point {label}", loc="left")
+        ax.grid(alpha=0.25)
+    axes[-1].set_xlabel("Time [hours]")
+    fig.suptitle(title)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.985))
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def save_depth_contours(
+    grids: Sequence[NDArray[np.floating[Any]]],
+    times_s: Sequence[float],
+    out_path: Path,
+    *,
+    extent: tuple[float, float, float, float],
+    level: float = 0.15,
+) -> None:
+    """Write depth maps with the requested wet-depth contour level."""
+    plt, _ = _plot_imports()
+    fig, axes = plt.subplots(1, len(grids), figsize=(6 * len(grids), 5), squeeze=False)
+    for ax, grid, time_s in zip(axes[0], grids, times_s, strict=True):
+        image = ax.imshow(grid, origin="lower", extent=extent)
+        ax.contour(grid, levels=[level], origin="lower", extent=extent, colors="black")
+        ax.set_title(f"t={time_s / 3600.0:g} h")
+        ax.set_xlabel("x [m]")
+        ax.set_ylabel("y [m]")
+        fig.colorbar(image, ax=ax, label="Depth [m]")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
+def save_cross_section(
+    distance_m: NDArray[np.floating[Any]],
+    values: NDArray[np.floating[Any]],
+    out_path: Path,
+    *,
+    ylabel: str,
+    title: str,
+) -> None:
+    """Write a longitudinal cross-section."""
+    plt, _ = _plot_imports()
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.plot(distance_m, values)
+    ax.set_xlabel("Distance west to east [m]")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=180)
+    plt.close(fig)
+
+
 def build_pipeline_like_phases(
     workflow: SWEWorkflow,
     phase_duration_s: float,

@@ -94,6 +94,8 @@ class WorkflowConfig:
     # default: it costs an extra buffer write per cell per RK stage.
     track_clamp_mass: bool = False
     geometry_cache_dir: str | os.PathLike[str] | None = None
+    capture_momentum_snapshots: bool = False
+    steps_per_graph: int | None = None
     output_every_steps: int | None = None
     solver_impl: Literal[
         "baseline",
@@ -146,8 +148,12 @@ class WorkflowResult:
     # Used to export complete warm starts and score velocity-based benchmarks.
     hu_final: NDArray[np.float32] | None = None
     hv_final: NDArray[np.float32] | None = None
+    # Optional momentum arrays aligned one-for-one with snapshots/snap_times.
+    hu_snapshots: list[NDArray[np.float32]] | None = None
+    hv_snapshots: list[NDArray[np.float32]] | None = None
     # Volume created by the update kernel's positivity clamp over the run.
     # None unless config.track_clamp_mass is enabled.
+    clamp_mass_m3: float | None = None
     clamp_mass_m3: float | None = None
 
 
@@ -521,7 +527,9 @@ class SWEWorkflow:
 
         snapshots: list[NDArray[np.float32]] = []
         snap_times: list[float] = []
+        hu_snapshots: list[NDArray[np.float32]] | None = [] if self.config.capture_momentum_snapshots else None
         t_current = 0.0
+        hv_snapshots: list[NDArray[np.float32]] | None = [] if self.config.capture_momentum_snapshots else None
 
         t_wall_start = time.perf_counter()
 
@@ -536,7 +544,12 @@ class SWEWorkflow:
             if self.config.solver_impl == "fixed_dt_batch_barrier":
                 solver_kwargs["output_every_steps"] = self.config.output_every_steps
 
-            phase_snapshots, phase_times = self.solver.run(
+            if self.config.capture_momentum_snapshots:
+                import inspect
+
+                if "capture_momentum_snapshots" in inspect.signature(self.solver.run).parameters:
+                    solver_kwargs["capture_momentum_snapshots"] = True
+            phase_result = self.solver.run(
                 t_end=t_end,
                 output_interval_s=self.config.output_interval_s,
                 dt_max=self.config.dt_max,
@@ -548,6 +561,13 @@ class SWEWorkflow:
                 cfl_interval=self.config.cfl_interval,
                 **solver_kwargs,
             )
+            if len(phase_result) == 4:
+                phase_snapshots, phase_times, phase_hu, phase_hv = phase_result
+                if hu_snapshots is not None and hv_snapshots is not None:
+                    hu_snapshots.extend(phase_hu)
+                    hv_snapshots.extend(phase_hv)
+            else:
+                phase_snapshots, phase_times = phase_result
 
             snapshots.extend(phase_snapshots)
             snap_times.extend(phase_times)
@@ -590,6 +610,8 @@ class SWEWorkflow:
             steps_total=int(getattr(self.solver, "steps_total", 0)),
             hu_final=hu_final,
             hv_final=hv_final,
+            hu_snapshots=hu_snapshots if hu_snapshots and len(hu_snapshots) == len(snapshots) else None,
+            hv_snapshots=hv_snapshots if hv_snapshots and len(hv_snapshots) == len(snapshots) else None,
             clamp_mass_m3=clamp_mass_m3,
         )
 

@@ -99,3 +99,21 @@ def test_render_html_adds_column_hover_descriptions() -> None:
     assert 'title="Reasons the benchmark gates failed, if any."' in rendered
     assert 'title="Undocumented benchmark field: &lt;future&amp;field&gt;."' in rendered
     assert '&lt;future&amp;field&gt;' in rendered
+
+
+def test_render_html_inlines_graphs_before_animations(tmp_path) -> None:
+    from deceris.inundation.bench.report import _suite_section
+
+    graph = tmp_path / "bad<&graph.png"
+    gif = tmp_path / "animation.gif"
+    graph.write_bytes(b"png")
+    gif.write_bytes(b"gif")
+    result = SuiteResult(
+        spec=SUITES[0], exit_code=0, wall_s=0.0, log_text="", summary={},
+        graph_paths=[graph], gif_paths=[gif],
+    )
+    rendered = _suite_section(result)
+    assert "Graphs" in rendered and "Animations" in rendered
+    assert rendered.index("Graphs") < rendered.index("Animations")
+    assert "data:image/png;base64" in rendered
+    assert "bad&lt;&amp;graph.png" in rendered
