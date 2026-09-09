@@ -28,7 +28,7 @@ are those bounds plus conservation.
 
 ## Dataset
 
-`Benchmarking_Model_Data/Test2 dataset 2010` (checked into the repo,
+`benchmark_assets/Test2 dataset 2010` (tracked in the repo; seven required EA Test 2/3/4 input files are committed,
 `--dataset-dir` to override):
 
 | File                     | Use                                                |

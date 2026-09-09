@@ -2,7 +2,7 @@
 
 Runs the UK Environment Agency "Benchmarking of 2D Hydraulic Modelling
 Packages" Test 2 from the published May-2010 dataset
-(``Benchmarking_Model_Data/Test2 dataset 2010``): the georeferenced 2 m
+(``benchmark_assets/Test2 dataset 2010``): the georeferenced 2 m
 ASCII DEM (``test2DEM.asc`` — a 2000 m x 2000 m "flattened egg box" of 16
 ~0.5 m depressions on a plane falling ~2 m along the NW→SE diagonal), the
 inflow hydrograph (``Test2_BC.csv``, peak 20 m^3/s over an ~85 min base,
@@ -83,9 +83,9 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 # ── Case geometry / physics (published dataset; see _build_parser) ──────────
-# Dataset files (May-2010 EA benchmark distribution, checked into the repo).
+# Dataset files (May-2010 EA benchmark distribution, tracked in the repo).
 DEFAULT_DATASET_DIR = (
-    Path(__file__).resolve().parents[3] / "Benchmarking_Model_Data" / "Test2 dataset 2010"
+    Path(__file__).resolve().parents[3] / "benchmark_assets" / "Test2 dataset 2010"
 )
 DEM_FILENAME = "test2DEM.asc"
 BC_FILENAME = "Test2_BC.csv"
@@ -409,6 +409,7 @@ def _make_workflow(
     workflow = SWEWorkflow(config)
     workflow.prepare()
     return workflow
+
 
 def _run_once(
     spec: DepressionSpec,

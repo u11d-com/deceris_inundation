@@ -2,7 +2,7 @@
 
 Runs the UK Environment Agency "Benchmarking of 2D Hydraulic Modelling
 Packages" Test 3 from the published May-2010 dataset
-(``Benchmarking_Model_Data/Test3 dataset 2010``): the georeferenced ASCII
+(``benchmark_assets/Test3 dataset 2010``): the georeferenced ASCII
 DEM (``test3DEM.asc``, prismatic 1:200 slope with two depressions separated
 by an obstruction) and the upstream inflow hydrograph (``Test3BC.csv``,
 65.5 m^3/s plateau, 1310 m^3 total). Modelled area per the spec: x in
@@ -86,10 +86,9 @@ from deceris.inundation.workflow import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-# ── Case geometry / physics (published dataset; see _build_parser) ──────────
-# Dataset files (May-2010 EA benchmark distribution, checked into the repo).
+# Dataset files (May-2010 EA benchmark distribution, tracked in the repo).
 DEFAULT_DATASET_DIR = (
-    Path(__file__).resolve().parents[3] / "Benchmarking_Model_Data" / "Test3 dataset 2010"
+    Path(__file__).resolve().parents[3] / "benchmark_assets" / "Test3 dataset 2010"
 )
 DEM_FILENAME = "test3DEM.asc"
 BC_FILENAME = "Test3BC.csv"
@@ -483,11 +482,19 @@ def _run_once(
     capture_momentum_snapshots: bool = False,
 ) -> tuple[SWEWorkflow, WorkflowResult]:
     workflow = _make_workflow(
-        spec, mesh_path, backend, output_interval_s=output_interval_s,
-        progress=progress, initial_state=initial_state,
+        spec,
+        mesh_path,
+        backend,
+        output_interval_s=output_interval_s,
+        progress=progress,
+        initial_state=initial_state,
         capture_momentum_snapshots=capture_momentum_snapshots,
     )
-    phases = (_hydrograph_phases(spec) if initial_state is None else [SimulationPhase(duration_s=spec.t_end_s, sources=[])])
+    phases = (
+        _hydrograph_phases(spec)
+        if initial_state is None
+        else [SimulationPhase(duration_s=spec.t_end_s, sources=[])]
+    )
     result = workflow.run(phases)
     return workflow, result
 
@@ -684,19 +691,49 @@ def _run_group(
             print(f"[{spec.name}/{backend}] gif frames {args.gif_frames} -> {safe_frames}")
         print(f"[{spec.name}/{backend}] extra untimed gif run ({safe_frames} frames)")
         gif_workflow, gif_result = _run_once(
-            spec, mesh_path, backend, output_interval_s=spec.t_end_s / safe_frames,
-            progress=args.solver_progress, capture_momentum_snapshots=True,
+            spec,
+            mesh_path,
+            backend,
+            output_interval_s=spec.t_end_s / safe_frames,
+            progress=args.solver_progress,
+            capture_momentum_snapshots=True,
         )
-        cells = np.asarray([_nearest_cell(gif_workflow, spec.point1_xy), _nearest_cell(gif_workflow, spec.point2_xy)], dtype=np.int64)
+        cells = np.asarray(
+            [
+                _nearest_cell(gif_workflow, spec.point1_xy),
+                _nearest_cell(gif_workflow, spec.point2_xy),
+            ],
+            dtype=np.int64,
+        )
         if gif_workflow.geom is None:
             raise RuntimeError("workflow must be prepared")
-        save_faceted_line_plot(gif_result.snap_times, water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells), ["1", "2"], Path(args.output_dir) / f"test3-water-levels-{backend}.png", ylabel="Water-surface elevation [m]", title="Test 3 obstruction water levels")
-        speed = speed_from_momentum(gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells)
+        save_faceted_line_plot(
+            gif_result.snap_times,
+            water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells),
+            ["1", "2"],
+            Path(args.output_dir) / f"test3-water-levels-{backend}.png",
+            ylabel="Water-surface elevation [m]",
+            title="Test 3 obstruction water levels",
+        )
+        speed = speed_from_momentum(
+            gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells
+        )
         if speed is not None:
-            save_faceted_line_plot(gif_result.snap_times, speed, ["1", "2"], Path(args.output_dir) / f"test3-velocities-{backend}.png", ylabel="Speed [m/s]", title="Test 3 obstruction velocities")
+            save_faceted_line_plot(
+                gif_result.snap_times,
+                speed,
+                ["1", "2"],
+                Path(args.output_dir) / f"test3-velocities-{backend}.png",
+                ylabel="Speed [m/s]",
+                title="Test 3 obstruction velocities",
+            )
         else:
-            print(f"[{spec.name}/{backend}] WARNING: omitted test3-velocities-{backend}.png; momentum snapshots unavailable")
-        gif_snapshots, gif_times = resample_snapshots_uniform(gif_result.snapshots, gif_result.snap_times, safe_frames)
+            print(
+                f"[{spec.name}/{backend}] WARNING: omitted test3-velocities-{backend}.png; momentum snapshots unavailable"
+            )
+        gif_snapshots, gif_times = resample_snapshots_uniform(
+            gif_result.snapshots, gif_result.snap_times, safe_frames
+        )
         save_depth_gif(
             gif_workflow,
             gif_snapshots,

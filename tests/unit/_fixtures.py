@@ -8,10 +8,9 @@ TEST_MESH_SMALL_FOOTPRINT = 100
 TEST_MESH_LARGE_FOOTPRINT = 10_000
 TEST_GPU_FREE_BYTES = 1000
 
-# The published EA benchmark datasets are not redistributed with the repo (see
-# .gitignore), so the tests that read them skip rather than fail on a clean
-# checkout. Everything that can be exercised without the data still runs.
-EA_DATASET_ROOT = Path(__file__).resolve().parents[2] / "Benchmarking_Model_Data"
+# The published EA benchmark inputs needed by the loader tests are tracked in
+# benchmark_assets/. Tests still skip when a partial source distribution omits it.
+EA_DATASET_ROOT = Path(__file__).resolve().parents[2] / "benchmark_assets"
 
 requires_ea_dataset = pytest.mark.skipif(
     not EA_DATASET_ROOT.is_dir(),

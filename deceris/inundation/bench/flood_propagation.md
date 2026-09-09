@@ -25,7 +25,8 @@ speed and first-wetting time per radius.
 
 ## Dataset
 
-`Benchmarking_Model_Data/Test4 dataset 2010` (`--dataset-dir` to override):
+`benchmark_assets/Test4 dataset 2010` (tracked in the repo; seven required EA Test 2/3/4 input files are committed,
+`--dataset-dir` to override):
 
 | File              | Use                                     |
 | ----------------- | --------------------------------------- |

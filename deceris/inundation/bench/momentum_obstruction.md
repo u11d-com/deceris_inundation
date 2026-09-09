@@ -11,7 +11,7 @@ conservation over a small obstruction**. Harness:
 Whether the solver preserves the shallow-water **momentum (inertia) terms**
 during a fast transient — the physics a diffusive-wave or over-dissipative
 scheme drops. The case runs the **published May-2010 dataset**
-(`Benchmarking_Model_Data/Test3 dataset 2010`): the georeferenced ASCII DEM
+(`benchmark_assets/Test3 dataset 2010`, tracked in the repo): the georeferenced ASCII DEM
 (`test3DEM.asc`, prismatic 1:200 slope with two depressions separated by an
 obstruction) and the upstream inflow hydrograph (`Test3BC.csv`, 65.5 m³/s
 plateau, 1310 m³ total). The flood wave travels down the slope and arrives

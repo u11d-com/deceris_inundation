@@ -2,7 +2,7 @@
 
 Runs the UK Environment Agency "Benchmarking of 2D Hydraulic Modelling
 Packages" Test 4 from the published May-2010 dataset
-(``Benchmarking_Model_Data/Test4 dataset 2010``): the inflow hydrograph
+(``benchmark_assets/Test4 dataset 2010``): the inflow hydrograph
 (``Test4BC.csv``, peak 20 m^3/s over a ~5 h base, 285 000 m^3 total) and the
 six published output points (``Test4output.csv``). The dataset ships **no
 DEM** — per the spec the floodplain is horizontal at elevation 0 — so the bed
@@ -58,10 +58,10 @@ from deceris.inundation.bench.common import (
     max_relative_error,
     nearest_cell_indices,
     resample_snapshots_uniform,
+    save_cross_section,
     save_depth_contours,
     save_depth_gif,
     save_faceted_line_plot,
-    save_cross_section,
     solve_radial_inflow,
     speed_from_momentum,
     volume_drift_rel,
@@ -81,8 +81,9 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 # ── Case geometry / physics (published dataset; see _build_parser) ──────────
+# Dataset files (May-2010 EA benchmark distribution, tracked in the repo).
 DEFAULT_DATASET_DIR = (
-    Path(__file__).resolve().parents[3] / "Benchmarking_Model_Data" / "Test4 dataset 2010"
+    Path(__file__).resolve().parents[3] / "benchmark_assets" / "Test4 dataset 2010"
 )
 BC_FILENAME = "Test4BC.csv"
 GAUGES_FILENAME = "Test4output.csv"
@@ -665,12 +666,30 @@ def _run_group(
         if gif_workflow.geom is None:
             raise RuntimeError("workflow must be prepared")
         wse = water_surface_elevation(gif_result.snapshots, gif_workflow.geom.zb, cells)
-        save_faceted_line_plot(gif_result.snap_times, wse[:, selected], [str(i + 1) for i in selected], Path(args.output_dir) / f"test4-water-levels-{backend}.png", ylabel="Water level [m]", title="Test 4 flood-front water levels")
-        speed = speed_from_momentum(gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells)
+        save_faceted_line_plot(
+            gif_result.snap_times,
+            wse[:, selected],
+            [str(i + 1) for i in selected],
+            Path(args.output_dir) / f"test4-water-levels-{backend}.png",
+            ylabel="Water level [m]",
+            title="Test 4 flood-front water levels",
+        )
+        speed = speed_from_momentum(
+            gif_result.hu_snapshots, gif_result.hv_snapshots, gif_result.snapshots, cells
+        )
         if speed is not None:
-            save_faceted_line_plot(gif_result.snap_times, speed[:, selected], [str(i + 1) for i in selected], Path(args.output_dir) / f"test4-velocities-{backend}.png", ylabel="Speed [m/s]", title="Test 4 flood-front velocities")
+            save_faceted_line_plot(
+                gif_result.snap_times,
+                speed[:, selected],
+                [str(i + 1) for i in selected],
+                Path(args.output_dir) / f"test4-velocities-{backend}.png",
+                ylabel="Speed [m/s]",
+                title="Test 4 flood-front velocities",
+            )
         else:
-            print(f"[{spec.name}/{backend}] WARNING: omitted test4-velocities-{backend}.png; momentum snapshots unavailable")
+            print(
+                f"[{spec.name}/{backend}] WARNING: omitted test4-velocities-{backend}.png; momentum snapshots unavailable"
+            )
         times = np.asarray(gif_result.snap_times, dtype=np.float64)
         picks = [int(np.argmin(abs(times - target))) for target in (3600.0, 10800.0)]
         grids = []
@@ -683,13 +702,30 @@ def _run_group(
                 row = np.clip((cy / (spec.domain_y_m / spec.ny)).astype(int), 0, spec.ny - 1)
                 grid[row, col] = gif_result.snapshots[pick]
             grids.append(grid)
-        save_depth_contours(grids, [times[p] for p in picks], Path(args.output_dir) / f"test4-depth-contours-{backend}.png", extent=(0.0, spec.domain_x_m, 0.0, spec.domain_y_m))
+        save_depth_contours(
+            grids,
+            [times[p] for p in picks],
+            Path(args.output_dir) / f"test4-depth-contours-{backend}.png",
+            extent=(0.0, spec.domain_x_m, 0.0, spec.domain_y_m),
+        )
         line_order = np.argsort(gauges[:, 0])
         distance = gauges[line_order, 0] - gauges[line_order, 0].min()
         one_hour = picks[0]
-        save_cross_section(distance, gif_result.snapshots[one_hour][cells[line_order]], Path(args.output_dir) / f"test4-depth-cross-section-{backend}.png", ylabel="Depth [m]", title="Test 4 depth cross-section at 1 hour")
+        save_cross_section(
+            distance,
+            gif_result.snapshots[one_hour][cells[line_order]],
+            Path(args.output_dir) / f"test4-depth-cross-section-{backend}.png",
+            ylabel="Depth [m]",
+            title="Test 4 depth cross-section at 1 hour",
+        )
         if speed is not None:
-            save_cross_section(distance, speed[one_hour, line_order], Path(args.output_dir) / f"test4-velocity-cross-section-{backend}.png", ylabel="Speed [m/s]", title="Test 4 velocity cross-section at 1 hour")
+            save_cross_section(
+                distance,
+                speed[one_hour, line_order],
+                Path(args.output_dir) / f"test4-velocity-cross-section-{backend}.png",
+                ylabel="Speed [m/s]",
+                title="Test 4 velocity cross-section at 1 hour",
+            )
         save_depth_gif(
             gif_workflow,
             gif_snapshots,
