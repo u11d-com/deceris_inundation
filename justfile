@@ -3,7 +3,7 @@ in_container := env_var_or_default("IN_CONTAINER", "")
 docker_prefix := if in_container == "1" { "" } else { "docker compose exec -T dev" }
 
 # Build the dev image (system deps + venv + kp), frozen lock. Run whenever
-# Dockerfile / pyproject.toml / uv.lock / kp-patches / build-kp-linux.sh change.
+# Dockerfile / pyproject.toml / uv.lock / vulkan/patches / build-kp-linux.sh change.
 image-build:
     docker build -t {{image}} .
 
@@ -70,29 +70,29 @@ check: lint format-check typecheck mdlint test
 
 
 benchmark-lake *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.lake_at_rest {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.lake_at_rest {{args}}
 
 
 # Tier 1 radial dam-break benchmark.
 benchmark-radial-dambreak *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.radial_dambreak {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.radial_dambreak {{args}}
 
 # EA Test 2 floodplain-depressions benchmark.
 benchmark-depressions *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.floodplain_depressions {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.floodplain_depressions {{args}}
 
 # EA Test 3 momentum-obstruction benchmark.
 benchmark-obstruction *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.momentum_obstruction {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.momentum_obstruction {{args}}
 
 # EA Test 4 flood-propagation benchmark.
 benchmark-propagation *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.flood_propagation {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.flood_propagation {{args}}
 
 # Run the benchmark harnesses and fold logs, metrics, and animations into
 # one self-contained HTML report at .tmp/bench-report/report.html.
 benchmark-report *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.bench.report {{args}}
+    {{docker_prefix}} uv run python -m inundation.bench.report {{args}}
 shell:
     {{docker_prefix}} bash
 
@@ -101,6 +101,6 @@ apptainer-build:
     apptainer build inundation.sif inundation.def
 
 # Run a command inside the SIF, bind-mounting the repo at /workspace like the
-# e.g. `just apptainer-run -- python -m deceris.inundation.bench.lake_at_rest`
+# e.g. `just apptainer-run -- python -m inundation.bench.lake_at_rest`
 apptainer-run *args:
     apptainer exec --nv --bind .:/workspace inundation.sif {{args}}

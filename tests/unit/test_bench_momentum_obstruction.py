@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from deceris.inundation.bench.momentum_obstruction import (
+from inundation.bench.momentum_obstruction import (
     CREST_X_M,
     DEFAULT_DATASET_DIR,
     INFLOW_CENTERS_Y_M,

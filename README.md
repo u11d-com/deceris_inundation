@@ -16,7 +16,8 @@ The runtime pipeline is:
 `fixed_dt_batch_barrier` is the validated reference implementation. The
 `gpu_resident_batch` implementation reduces host synchronization. The public
 Python API is `SWEWorkflow`, `WorkflowConfig`, `SimulationPhase`,
-`PointSource`, and `WorkflowResult` from `deceris.inundation`.
+`PointSource`, and `WorkflowResult` from the top-level `inundation` package
+(distribution name `deceris-inundation`).
 
 ## Supported runtime
 
@@ -47,8 +48,8 @@ just down
 
 `just up` assumes the `deceris-inundation:dev` image already exists. Rebuild
 it after changing `Dockerfile`, `pyproject.toml`, `uv.lock`,
-`deceris/inundation/vulkan/patches/`, or
-`deceris/inundation/scripts/build-kp-linux.sh`. Source changes under the
+`inundation/vulkan/patches/`, or
+`inundation/scripts/build-kp-linux.sh`. Source changes under the
 bind-mounted repository do not require an image rebuild.
 
 ## macOS development
@@ -63,7 +64,7 @@ Use the native host environment for Vulkan work through MoltenVK:
 ```sh
 brew install uv cmake molten-vk vulkan-headers vulkan-loader vulkan-tools glslang
 uv sync --all-extras
-deceris/inundation/scripts/build-kp-macos.sh
+inundation/scripts/build-kp-macos.sh
 export VK_ICD_FILENAMES="$(brew --prefix)/etc/vulkan/icd.d/MoltenVK_icd.json"
 ```
 
@@ -89,7 +90,7 @@ IN_CONTAINER=1 just benchmark-lake --backend gpu_resident_batch
 or invoke the host interpreter directly:
 
 ```sh
-.venv/bin/python -m deceris.inundation.bench.lake_at_rest \
+.venv/bin/python -m inundation.bench.lake_at_rest \
   --backend gpu_resident_batch
 ```
 
@@ -107,7 +108,7 @@ are ignored. Without `z_mean`, the bed is initialized at zero.
 Minimal application usage:
 
 ```python
-from deceris.inundation import PointSource, SimulationPhase, SWEWorkflow, WorkflowConfig
+from inundation import PointSource, SimulationPhase, SWEWorkflow, WorkflowConfig
 
 config = WorkflowConfig(
     mesh_source="mesh.gpkg",
@@ -129,7 +130,7 @@ print(result.h_final, result.volume_final_m3)
 
 `prepare()` must run before `run()`. Set `geometry_cache_dir` in
 `WorkflowConfig` to reuse the processed mesh between runs. See
-`deceris/inundation/workflow.py` for the complete configuration surface.
+`inundation/workflow.py` for the complete configuration surface.
 
 ## Benchmarks
 
@@ -154,12 +155,12 @@ just benchmark-lake --backend fixed_dt_batch_barrier --flat-bed --hash
 
 Detailed benchmark contracts and flags are documented beside their harnesses:
 
-- [lake-at-rest](deceris/inundation/bench/lake_at_rest.md)
-- [analytical dam-break](deceris/inundation/bench/dambreak.md)
-- [radial dam-break](deceris/inundation/bench/radial_dambreak.md)
-- [floodplain depressions](deceris/inundation/bench/floodplain_depressions.md)
-- [momentum obstruction](deceris/inundation/bench/momentum_obstruction.md)
-- [flood propagation](deceris/inundation/bench/flood_propagation.md)
+- [lake-at-rest](inundation/bench/lake_at_rest.md)
+- [analytical dam-break](inundation/bench/dambreak.md)
+- [radial dam-break](inundation/bench/radial_dambreak.md)
+- [floodplain depressions](inundation/bench/floodplain_depressions.md)
+- [momentum obstruction](inundation/bench/momentum_obstruction.md)
+- [flood propagation](inundation/bench/flood_propagation.md)
 
 ## Production Apptainer image
 
@@ -169,7 +170,7 @@ NVIDIA Vulkan passthrough:
 ```sh
 just image-build
 just apptainer-build
-just apptainer-run -- python -m deceris.inundation.bench.lake_at_rest --help
+just apptainer-run -- python -m inundation.bench.lake_at_rest --help
 ```
 
 The repository is bind-mounted at `/workspace`; code changes do not require a
@@ -178,10 +179,10 @@ change.
 
 ## Project layout
 
-- `deceris/inundation/` — solver package and workflow API
-- `deceris/inundation/vulkan/` — Vulkan/Kompute implementations and shaders
-- `deceris/inundation/mesh/` — mesh loading, geometry, and caching
-- `deceris/inundation/bench/` — benchmark harnesses and reports
+- `inundation/` — solver package and workflow API
+- `inundation/vulkan/` — Vulkan/Kompute implementations and shaders
+- `inundation/mesh/` — mesh loading, geometry, and caching
+- `inundation/bench/` — benchmark harnesses and reports
 - `tests/` — unit tests
 - `docs/architecture/overview.md` — solver architecture and invariants
 
@@ -192,5 +193,5 @@ uv sync --all-extras
 ```
 
 Linux host execution also needs the Kompute binding built by
-`deceris/inundation/scripts/build-kp-linux.sh`; the Docker image performs that
+`inundation/scripts/build-kp-linux.sh`; the Docker image performs that
 step automatically.

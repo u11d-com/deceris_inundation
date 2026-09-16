@@ -16,9 +16,9 @@ __pycache__/
 *.npz
 .tmp/
 
-# Benchmark output directory (kept under deceris/inundation/ for legacy path
-# compatibility — .rsync-ignore also excludes it for remote rsync workflows).
-deceris/inundation/results/
+# Benchmark output directory (kept under inundation/ for the benchmark
+# recipes; also excluded from remote sync workflows).
+inundation/results/
 
 # qmd local SQLite index. Config (index.yml) is committed — project-scoped
 # config uses relative paths. The .sqlite is rebuilt locally via

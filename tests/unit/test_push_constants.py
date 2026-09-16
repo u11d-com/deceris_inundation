@@ -24,7 +24,8 @@ import re
 
 import pytest
 
-from deceris.inundation.vulkan.shaders import (
+# pyright: reportPrivateUsage=false
+from inundation.vulkan.shaders import (
     CFL_ACCUM_GLSL,
     CFL_REDUCE_GLSL,
     FLUX_DTBUF_GLSL,
@@ -32,7 +33,7 @@ from deceris.inundation.vulkan.shaders import (
     UPDATE_DTBUF_GLSL,
     UPDATE_GLSL,
 )
-from deceris.inundation.vulkan.solver import (
+from inundation.vulkan.solver import (
     _pc_cfl_accum,
     _pc_cfl_reduce,
     _pc_flux,

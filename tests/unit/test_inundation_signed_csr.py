@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from deceris.inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
+from inundation.mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

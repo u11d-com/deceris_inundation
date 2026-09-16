@@ -1,7 +1,9 @@
 # Archive
 
 Historical originals of the canonical docs, preserved 1:1 in their original
-paths under `deceris/inundation/...`. Each file here is byte-for-byte
+in-monorepo paths under `deceris/inundation/...` (paths as they were before
+this repo was extracted from the deceris api monorepo; the package now lives
+at `inundation/`). Each file here is byte-for-byte
 identical to the version that was renamed + moved into the canonical tree
 during the 2026-Q3 docs rework.
 
@@ -20,7 +22,11 @@ during the 2026-Q3 docs rework.
 
 ## 1:1 path map
 
-| Canonical (new) | Archive (original) |
+The "Archive (original)" column lists the docs' original monorepo paths at
+extraction time (pre-rename `deceris/inundation/...`). The historical files
+themselves are not tracked in this repo; only this mapping survives.
+
+| Canonical (new) | Original monorepo path |
 | --- | --- |
 | `docs/architecture/overview.md` | `archive/deceris/inundation/ARCHITECTURE.md` |
 | `docs/architecture/cuda-migration.md` | `archive/deceris/inundation/CUDA_MIGRATION_PLAN.md` |

@@ -12,7 +12,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from deceris.inundation.bench.common import (
+# pytest.approx is typed only loosely in pytest 9.0.2 (untyped expected/rel/abs
+# params), so every call site surfaces as "partially unknown" under strict.
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false
+from inundation.bench.common import (
     check_state_health,
     l1_relative_error,
     max_relative_error,

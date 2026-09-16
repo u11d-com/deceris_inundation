@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from deceris.inundation.bench.common import (
+from inundation.bench.common import (
     build_channel_mesh,
     ritter_solution,
     stoker_middle_depth,

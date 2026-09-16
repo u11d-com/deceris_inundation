@@ -14,7 +14,7 @@ boundary through five equal volume sources. It injects 97,200 m³ over roughly
 
 ## Harness
 
-Run `deceris/inundation/bench/floodplain_depressions.py` through
+Run `inundation/bench/floodplain_depressions.py` through
 `just benchmark-depressions`. The default is `gpu_resident_batch`; other
 retained Vulkan implementations are selectable with `--backends`.
 

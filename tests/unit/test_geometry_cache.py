@@ -10,13 +10,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from deceris.inundation.mesh.cache import (
+from inundation.mesh.cache import (
     _GEOMETRY_ARRAY_FIELDS,
     _GEOMETRY_SCALAR_FIELDS,
     load_geometry_cache,
     save_geometry_cache,
 )
-from deceris.inundation.mesh.geometry import build_geometry, hilbert_reorder
+from inundation.mesh.geometry import build_geometry, hilbert_reorder
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

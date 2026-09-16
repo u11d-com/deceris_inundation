@@ -6,17 +6,18 @@ run. The solver-facing gates live in bench/flood_propagation.py (manual,
 GPU-required).
 """
 
-# pyright: reportPrivateUsage=false
+# pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 # The harness's dataset helpers are module-private (leading underscore);
 # exercising them here is intentional, so silence the private-usage warning.
+# pytest.approx is loosely typed in pytest 9.0.2; see test_bench_gates.py.
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from deceris.inundation.bench.common import solve_radial_inflow
-from deceris.inundation.bench.flood_propagation import (
+from inundation.bench.common import RadialInflowSolution, solve_radial_inflow
+from inundation.bench.flood_propagation import (
     DEFAULT_DATASET_DIR,
     DOMAIN_X_M,
     DOMAIN_Y_M,
@@ -54,7 +55,7 @@ def _spec(**over: object) -> PropagationSpec:
     return PropagationSpec(**base)  # pyright: ignore[reportArgumentType]
 
 
-def _cheap_reference(**over: object) -> object:
+def _cheap_reference(**over: object) -> RadialInflowSolution:
     """Small, fast reference solve for logic tests."""
     kwargs: dict[str, object] = {
         "hydrograph_t_s": np.array([0.0, 60.0, 600.0], dtype=np.float64),

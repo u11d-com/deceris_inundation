@@ -11,7 +11,7 @@ The native two-metre DEM covers a 300 m × 100 m modelled area with 150 × 50
 cells. The published 35-second hydrograph peaks at 65.5 m³/s and injects
 1310 m³. Manning is 0.01 and the run ends at 900 s.
 
-Run `deceris/inundation/bench/momentum_obstruction.py` through
+Run `inundation/bench/momentum_obstruction.py` through
 `just benchmark-obstruction`. The default is `gpu_resident_batch`; other
 retained Vulkan implementations are selectable with `--backends`.
 

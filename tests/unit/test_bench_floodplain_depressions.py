@@ -7,23 +7,24 @@ solver-facing gates live in bench/floodplain_depressions.py (manual,
 GPU-required).
 """
 
-# pyright: reportPrivateUsage=false
+# pyright: reportPrivateUsage=false, reportUnknownMemberType=false, reportUnknownArgumentType=false
 # The harness's dataset helpers are module-private (leading underscore);
 # exercising them here is intentional, so silence the private-usage warning.
+# pytest.approx is loosely typed in pytest 9.0.2; see test_bench_gates.py.
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from deceris.inundation.bench.common import (
+from inundation.bench.common import (
     AsciiGrid,
     block_average_grid,
     depression_basin,
     load_ascii_grid,
     resample_snapshots_uniform,
 )
-from deceris.inundation.bench.floodplain_depressions import (
+from inundation.bench.floodplain_depressions import (
     DEFAULT_DATASET_DIR,
     DOMAIN_L_M,
     DepressionSpec,

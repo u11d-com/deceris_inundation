@@ -21,7 +21,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["deceris"]
+packages = ["inundation"]
 
 # =============================================================================
 # Ruff — linter and formatter (trimmed scientific)
@@ -31,7 +31,7 @@ packages = ["deceris"]
 target-version = "py312"
 line-length = 100
 indent-width = 4
-src = ["deceris", "tests"]
+src = ["inundation", "tests"]
 extend-exclude = ["stubs"]
 
 [tool.ruff.lint]
@@ -63,6 +63,7 @@ select = [
 
 ignore = [
     "E501", # line length enforced by formatter
+    "RUF001", # × in benchmark descriptions is intentional prose, not x
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -73,12 +74,24 @@ ignore = [
     "S107",   # hardcoded password defaults fine in test helpers
     "BLE001", # pytest.raises on framework errors
 ]
-"deceris/inundation/bench/**/*.py" = [
+"inundation/bench/**/*.py" = [
     "T201", # print = CLI benchmark output
+]
+"inundation/bringup/**/*.py" = [
+    "T201", # print = CLI bring-up check output
+]
+"inundation/mesh/cache.py" = [
+    "T201", # print = standalone self-check entrypoint output
+]
+"inundation/vulkan/**/*.py" = [
+    # Backend run() implementations share one uniform signature so the
+    # workflow can dispatch uniformly; some backends legitimately ignore
+    # parameters they don't need.
+    "ARG002", # unused method argument = uniform backend signature
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["deceris"]
+known-first-party = ["inundation"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -92,7 +105,7 @@ line-ending = "lf"
 [tool.pyright]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
-include = ["deceris", "tests"]
+include = ["inundation", "tests"]
 exclude = ["**/__pycache__", "**/.venv", "**/.git"]
 stubPath = "stubs"
 
@@ -109,7 +122,15 @@ reportMissingTypeStubs = false
 # Mesh loaders bridge several third-party libraries whose cross-library
 # inference remains incomplete under strict checking.
 [[tool.pyright.executionEnvironments]]
-root = "deceris/inundation/swe_mesh.py"
+root = "inundation/mesh"
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+
+# Benchmark plotting helpers reach matplotlib lazily (viz extra is optional);
+# its untyped pyplot API surfaces as unknowns under strict checking.
+[[tool.pyright.executionEnvironments]]
+root = "inundation/bench"
 reportUnknownMemberType = false
 reportUnknownArgumentType = false
 reportUnknownVariableType = false

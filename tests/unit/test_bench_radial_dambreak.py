@@ -13,13 +13,18 @@ GPU, no solver run. The solver-facing gates live in bench/radial_dambreak.py
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
-from deceris.inundation.bench.common import (
+from inundation.bench.common import (
     radial_dambreak_reference,
     solve_radial_dambreak,
 )
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 G = 9.81
 H_IN = 2.5
@@ -29,7 +34,7 @@ R_MAX = 20.0
 T = 1.5
 
 
-def _annular_volume(r_c: np.ndarray, h: np.ndarray) -> float:
+def _annular_volume(r_c: NDArray[np.float64], h: NDArray[np.float64]) -> float:
     """2*pi * integral r h dr over the fine radial grid."""
     dr = float(r_c[1] - r_c[0])
     return float(2.0 * np.pi * np.sum(r_c * h) * dr)

@@ -8,7 +8,7 @@ dam-break whose bore crosses a Cartesian mesh.
 ## Reference and harness
 
 A 2000-cell axisymmetric finite-volume solve supplies the radial reference.
-Run `deceris/inundation/bench/radial_dambreak.py` through
+Run `inundation/bench/radial_dambreak.py` through
 `just benchmark-radial-dambreak`. The default is `gpu_resident_batch`; other
 retained Vulkan implementations are selectable with `--backends`.
 

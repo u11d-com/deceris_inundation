@@ -10,7 +10,7 @@ FROM ubuntu:24.04
 #
 # Code is NEVER copied into this image — it's bind-mounted at /workspace at
 # runtime by all three consumers. Only the files needed to resolve+build the
-# venv (pyproject.toml, uv.lock, build-kp-linux.sh, kp-patches/) are copied in.
+# venv (pyproject.toml, uv.lock, build-kp-linux.sh, vulkan/patches/) are copied in.
 #
 # Production uses the host's NVIDIA driver through Apptainer passthrough.
 
@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         vulkan-tools \
         glslang-tools \
         cmake \
+        make \
+        g++ \
         patch \
         libx11-6 \
         libxext6 \
@@ -41,8 +43,8 @@ RUN curl -LsSf https://astral.sh/uv/0.11.29/install.sh | env UV_INSTALL_DIR=/usr
 
 WORKDIR /opt/build
 COPY pyproject.toml uv.lock ./
-COPY deceris/inundation/scripts/build-kp-linux.sh ./
-COPY deceris/inundation/vulkan/patches ./patches
+COPY inundation/scripts/build-kp-linux.sh ./
+COPY inundation/vulkan/patches ./patches
 
 RUN uv sync --frozen --python 3.12 --no-install-project --all-extras \
     && chmod +x build-kp-linux.sh \

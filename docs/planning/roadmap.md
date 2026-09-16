@@ -12,7 +12,6 @@ convergence shows expected profile order and confirms Test 4 front bias shrinks
 with resolution. Its mass drift changes sign with mesh and stopping time; the
 positivity clamp contributes exactly zero.
 
-
 ## Priorities
 
 1. Build a float64 state reference for the measured mass-drift cases.

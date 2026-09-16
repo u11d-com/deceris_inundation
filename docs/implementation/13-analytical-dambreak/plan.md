@@ -8,7 +8,7 @@ external data.
 
 ## Harness
 
-Run `deceris/inundation/bench/dambreak.py` through `just benchmark-dambreak`.
+Run `inundation/bench/dambreak.py` through `just benchmark-dambreak`.
 The default is `gpu_resident_batch`; other retained Vulkan implementations are
 selectable with `--backends`.
 

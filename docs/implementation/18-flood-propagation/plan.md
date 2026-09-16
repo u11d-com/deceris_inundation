@@ -14,7 +14,7 @@ other boundaries. A fine radial solve supplies arrivals, depths, and speeds.
 
 ## Harness
 
-Run `deceris/inundation/bench/flood_propagation.py` through
+Run `inundation/bench/flood_propagation.py` through
 `just benchmark-propagation`. The default is `gpu_resident_batch`; other
 retained Vulkan implementations are selectable with `--backends`.
 
