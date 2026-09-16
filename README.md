@@ -11,12 +11,12 @@ The runtime pipeline is:
 2. Build edge and CSR adjacency, then optionally Hilbert-reorder and cache it.
 3. Compile the GLSL compute shaders to SPIR-V.
 4. Run HLLC flux, source, update, and CFL stages through a Vulkan solver.
-5. Download depth and momentum snapshots at the configured cadence.
+5. Download depth snapshots at the configured cadence; optionally download momentum snapshots when enabled.
 
 `fixed_dt_batch_barrier` is the validated reference implementation. The
 `gpu_resident_batch` implementation reduces host synchronization. The public
-Python API is `SWEWorkflow`, `WorkflowConfig`, `SimulationPhase`, and
-`PointSource` from `deceris.inundation`.
+Python API is `SWEWorkflow`, `WorkflowConfig`, `SimulationPhase`,
+`PointSource`, and `WorkflowResult` from `deceris.inundation`.
 
 ## Supported runtime
 
@@ -46,9 +46,56 @@ just down
 ```
 
 `just up` assumes the `deceris-inundation:dev` image already exists. Rebuild
-it after changing `Dockerfile`, `pyproject.toml`, `uv.lock`, or the Kompute
-build inputs under `deceris/inundation/vulkan/` and
-`deceris/inundation/scripts/`.
+it after changing `Dockerfile`, `pyproject.toml`, `uv.lock`,
+`deceris/inundation/vulkan/patches/`, or
+`deceris/inundation/scripts/build-kp-linux.sh`. Source changes under the
+bind-mounted repository do not require an image rebuild.
+
+## macOS development
+
+Docker Desktop on macOS is suitable for repository checks and packaging, but
+it does not provide the host Apple GPU as a Vulkan device inside this Linux
+container. Do not use the default Docker-backed `just benchmark-*` recipes for
+GPU execution on macOS.
+
+Use the native host environment for Vulkan work through MoltenVK:
+
+```sh
+brew install uv cmake molten-vk vulkan-headers vulkan-loader vulkan-tools glslang
+uv sync --all-extras
+deceris/inundation/scripts/build-kp-macos.sh
+export VK_ICD_FILENAMES="$(brew --prefix)/etc/vulkan/icd.d/MoltenVK_icd.json"
+```
+
+If `patch` is unavailable, install the Xcode command-line tools with
+`xcode-select --install`. The Kompute build script validates a real
+`kp.Manager()` round trip against MoltenVK and installs the patched binding in
+`.venv`.
+
+Run checks natively by bypassing the Docker prefix:
+
+```sh
+IN_CONTAINER=1 just lint
+IN_CONTAINER=1 just typecheck
+IN_CONTAINER=1 just test
+```
+
+Run GPU benchmarks either through the same `IN_CONTAINER=1` switch:
+
+```sh
+IN_CONTAINER=1 just benchmark-lake --backend gpu_resident_batch
+```
+
+or invoke the host interpreter directly:
+
+```sh
+.venv/bin/python -m deceris.inundation.bench.lake_at_rest \
+  --backend gpu_resident_batch
+```
+
+The macOS/MoltenVK path is for development and correctness checks. Linux
+NVIDIA nodes remain the production performance environment; the Apptainer
+recipe and `--nv` passthrough do not apply to macOS.
 
 ## Running the solver
 
@@ -86,7 +133,9 @@ print(result.h_final, result.volume_final_m3)
 
 ## Benchmarks
 
-All benchmark recipes run inside the development container:
+On Linux, or when the Docker-backed development environment is available,
+benchmark recipes run inside the development container. On macOS, use the
+native workflow above instead.
 
 ```sh
 just benchmark-lake --help
@@ -142,6 +191,6 @@ Optional host-only dependencies can be installed with:
 uv sync --all-extras
 ```
 
-Host execution also needs the Kompute binding built by
+Linux host execution also needs the Kompute binding built by
 `deceris/inundation/scripts/build-kp-linux.sh`; the Docker image performs that
 step automatically.
