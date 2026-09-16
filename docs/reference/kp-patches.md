@@ -67,3 +67,13 @@ t = mgr.tensor([1.0, 2.0, 3.0])
 print(f'kp {kp.__version__} OK: {t.data()}')
 "
 ```
+
+## Installed location
+
+The `inundation/vulkan/patches/` directory ships inside the wheel as package
+data, so downstream consumers can locate it through the installed package
+rather than a source checkout:
+
+```sh
+python -c "import inundation, pathlib; print(pathlib.Path(inundation.__file__).parent / 'vulkan/patches')"
+```

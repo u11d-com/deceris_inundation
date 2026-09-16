@@ -6,13 +6,14 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .cache import geometry_cache_key, load_geometry_cache, save_geometry_cache
-    from .geometry import MeshGeometry, build_geometry, hilbert_reorder
+    from .geometry import MeshGeometry, build_geometry, hilbert_permutation, hilbert_reorder
     from .loader import load_mesh_file
 
 __all__ = [
     "MeshGeometry",
     "build_geometry",
     "geometry_cache_key",
+    "hilbert_permutation",
     "hilbert_reorder",
     "load_geometry_cache",
     "load_mesh_file",
@@ -32,6 +33,7 @@ def __getattr__(name: str) -> object:
         from .geometry import (  # pyright: ignore[reportMissingModuleSource]
             MeshGeometry,
             build_geometry,
+            hilbert_permutation,
             hilbert_reorder,
         )
         from .loader import load_mesh_file  # pyright: ignore[reportMissingModuleSource]
@@ -42,6 +44,7 @@ def __getattr__(name: str) -> object:
             "save_geometry_cache": save_geometry_cache,
             "MeshGeometry": MeshGeometry,
             "build_geometry": build_geometry,
+            "hilbert_permutation": hilbert_permutation,
             "hilbert_reorder": hilbert_reorder,
             "load_mesh_file": load_mesh_file,
         }[name]
