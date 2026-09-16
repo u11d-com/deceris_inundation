@@ -24,14 +24,14 @@ From: deceris-inundation:dev
     Preferred: use the justfile from the repo root.
       just image-build      # build deceris-inundation:dev
       just apptainer-build  # apptainer build inundation.sif inundation.def
-      just apptainer-run -- python -m deceris.inundation.benchmark_lake_at_rest
+      just apptainer-run -- python -m deceris.inundation.bench.lake_at_rest
 
     Equivalent raw commands, if not using just:
       docker build -t deceris-inundation:dev .
       apptainer build inundation.sif inundation.def
       apptainer exec --nv --bind .:/workspace \
         inundation.sif \
-        python -m deceris.inundation.benchmark_lake_at_rest
+        python -m deceris.inundation.bench.lake_at_rest
 
     Vulkan/kp needs the host's NVIDIA Vulkan ICD and userspace libraries.
     The --nv option exposes that driver stack to the container.

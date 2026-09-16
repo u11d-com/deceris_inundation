@@ -70,7 +70,7 @@ check: lint format-check typecheck mdlint test
 
 
 benchmark-lake *args:
-    {{docker_prefix}} uv run python -m deceris.inundation.benchmark_lake_at_rest {{args}}
+    {{docker_prefix}} uv run python -m deceris.inundation.bench.lake_at_rest {{args}}
 
 
 # Tier 1 radial dam-break benchmark.
@@ -101,6 +101,6 @@ apptainer-build:
     apptainer build inundation.sif inundation.def
 
 # Run a command inside the SIF, bind-mounting the repo at /workspace like the
-# dev container. e.g. `just apptainer-run -- python -m deceris.inundation.benchmark_lake_at_rest`
+# e.g. `just apptainer-run -- python -m deceris.inundation.bench.lake_at_rest`
 apptainer-run *args:
     apptainer exec --nv --bind .:/workspace inundation.sif {{args}}
