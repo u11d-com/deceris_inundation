@@ -44,12 +44,18 @@ class MeshGeometry:
     centroid   : (N, 2) float32  - cell centroids
     area       : (N,)   float32  - cell area (shoelace formula)
     zb         : (N,)   float32  - static bed elevation
+    cell_bbox  : (N, 4) float32  - per-cell xmin, xmax, ymin, ymax
+
+    Polygon vertices
+    ----------------
+    cell_vertices   : (sum_of_degrees, 2) float32 - flattened cell vertices
+    cell_vertex_ptr : (N+1,) int32 - row pointers into cell_vertices
 
     Edge arrays (E entries each)
     ----------------------------
     edge_len   : (E,)   float32  - edge length
-    edge_nx    : (E,)   float32  - outward normal x (from left cell)
-    edge_ny    : (E,)   float32  - outward normal y
+    edge_nx   : (E,)   float32  - outward normal x (from left cell)
+    edge_ny   : (E,)   float32  - outward normal y
     edge_cellL : (E,)   int32    - left cell index
     edge_cellR : (E,)   int32    - right cell index (-1 = boundary)
 
@@ -80,6 +86,9 @@ class MeshGeometry:
     centroid: NDArray[np.float32]
     area: NDArray[np.float32]
     zb: NDArray[np.float32]
+    cell_vertices: NDArray[np.float32]
+    cell_vertex_ptr: NDArray[np.int32]
+    cell_bbox: NDArray[np.float32]
     edge_len: NDArray[np.float32]
     edge_nx: NDArray[np.float32]
     edge_ny: NDArray[np.float32]
@@ -251,6 +260,16 @@ def build_geometry(
                 cell_verts = cell_verts[::-1]
             area[ci] = np.float32(max(sa, 1e-30))
             centroid[ci] = _polygon_centroid(cell_verts, sa)
+    cell_vertex_ptr = np.asarray(face_offsets, dtype=np.int32).copy()
+    cell_vertices = verts[faces].astype(np.float32, copy=True)
+    cell_bbox = np.column_stack(
+        [
+            np.minimum.reduceat(cell_vertices[:, 0], cell_vertex_ptr[:-1]),
+            np.maximum.reduceat(cell_vertices[:, 0], cell_vertex_ptr[:-1]),
+            np.minimum.reduceat(cell_vertices[:, 1], cell_vertex_ptr[:-1]),
+            np.maximum.reduceat(cell_vertices[:, 1], cell_vertex_ptr[:-1]),
+        ]
+    ).astype(np.float32)
 
     # ── Bed elevation ─────────────────────────────────────────────────────────
     _log(f"cell area/centroid done in {time.perf_counter() - _t_stage:.1f}s")
@@ -398,6 +417,9 @@ def build_geometry(
         centroid=centroid,
         area=area,
         zb=zb,
+        cell_vertices=cell_vertices,
+        cell_vertex_ptr=cell_vertex_ptr,
+        cell_bbox=cell_bbox,
         edge_len=edge_len,
         edge_nx=edge_nx,
         edge_ny=edge_ny,
@@ -483,6 +505,18 @@ def hilbert_reorder(
     centroid = geom.centroid[perm]
     area = geom.area[perm]
     zb = geom.zb[perm]
+    cell_bbox = geom.cell_bbox[perm]
+
+    old_vertex_degrees = np.diff(geom.cell_vertex_ptr)
+    new_vertex_ptr = np.zeros(N + 1, dtype=np.int32)
+    np.cumsum(old_vertex_degrees[perm], out=new_vertex_ptr[1:])
+    cell_vertices = np.empty_like(geom.cell_vertices)
+    for new_i in range(N):
+        old_i = int(perm[new_i])
+        old_s = int(geom.cell_vertex_ptr[old_i])
+        old_e = int(geom.cell_vertex_ptr[old_i + 1])
+        new_s = int(new_vertex_ptr[new_i])
+        cell_vertices[new_s : new_s + old_e - old_s] = geom.cell_vertices[old_s:old_e]
 
     # Re-index edge cell references
     edge_cellL_new = inv_perm[geom.edge_cellL].astype(np.int32)
@@ -580,6 +614,9 @@ def hilbert_reorder(
         centroid=centroid,
         area=area,
         zb=zb,
+        cell_vertices=cell_vertices,
+        cell_vertex_ptr=new_vertex_ptr,
+        cell_bbox=cell_bbox,
         edge_len=edge_len_sorted,
         edge_nx=edge_nx_sorted,
         edge_ny=edge_ny_sorted,

@@ -157,18 +157,70 @@ class WorkflowResult:
     clamp_mass_m3: float | None = None
 
 
+def _point_in_polygon(point: NDArray[np.float64], polygon: NDArray[np.float64]) -> bool:
+    """Return whether a point is inside or on the boundary of a polygon."""
+    x, y = float(point[0]), float(point[1])
+    scale = max(1.0, float(np.abs(polygon).max()), abs(x), abs(y))
+    tolerance = 1e-10 * scale
+    inside = False
+    for start, end in zip(polygon, np.roll(polygon, -1, axis=0), strict=True):
+        ax, ay = float(start[0]), float(start[1])
+        bx, by = float(end[0]), float(end[1])
+        cross = (x - ax) * (by - ay) - (y - ay) * (bx - ax)
+        if (
+            abs(cross) <= tolerance
+            and min(ax, bx) - tolerance <= x <= max(ax, bx) + tolerance
+            and min(ay, by) - tolerance <= y <= max(ay, by) + tolerance
+        ):
+            return True
+        if (ay > y) != (by > y):
+            x_intersection = ax + (y - ay) * (bx - ax) / (by - ay)
+            if x < x_intersection:
+                inside = not inside
+    return inside
+
+
 def select_cells_within_radius(
     centroid: NDArray[np.float32],
     center_xy: tuple[float, float],
     radius_m: float,
     valid_mask: NDArray[np.bool_] | None = None,
+    cell_vertices: NDArray[np.float32] | None = None,
+    cell_vertex_ptr: NDArray[np.int32] | None = None,
+    cell_bbox: NDArray[np.float32] | None = None,
 ) -> NDArray[np.bool_]:
-    """Return a boolean mask of cells within a circle."""
-    center = np.asarray(center_xy, dtype=np.float32)
+    """Return centroid-selected cells plus the cell containing the source."""
+    center = np.asarray(center_xy, dtype=np.float64)
+    if radius_m < 0.0:
+        return np.zeros(centroid.shape[0], dtype=bool)
+
     dist = np.hypot(centroid[:, 0] - center[0], centroid[:, 1] - center[1])
     mask = dist <= float(radius_m)
     if valid_mask is not None:
         mask &= valid_mask
+    if (
+        cell_vertices is None
+        or cell_vertex_ptr is None
+        or cell_bbox is None
+        or not centroid.shape[0]
+    ):
+        return mask
+
+    bbox = np.asarray(cell_bbox, dtype=np.float64)
+    candidate = (
+        (bbox[:, 0] <= center[0])
+        & (bbox[:, 1] >= center[0])
+        & (bbox[:, 2] <= center[1])
+        & (bbox[:, 3] >= center[1])
+    )
+    if valid_mask is not None:
+        candidate &= valid_mask
+    for cell_index in np.flatnonzero(candidate):
+        start = int(cell_vertex_ptr[cell_index])
+        end = int(cell_vertex_ptr[cell_index + 1])
+        polygon = np.asarray(cell_vertices[start:end], dtype=np.float64)
+        if _point_in_polygon(center, polygon):
+            mask[cell_index] = True
     return mask
 
 
@@ -344,6 +396,9 @@ def _build_phase_source_rate(
             source.center_xy,
             source.radius_m,
             valid_mask=valid_cell,
+            cell_vertices=geom.cell_vertices,
+            cell_vertex_ptr=geom.cell_vertex_ptr,
+            cell_bbox=geom.cell_bbox,
         )
         if not mask.any():
             continue
