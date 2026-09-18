@@ -1,0 +1,252 @@
+---
+const repositoryUrl = 'https://github.com/u11d-com/deceris_inundation';
+
+const pipeline = [
+  { index: '01', name: 'Mesh', detail: 'cells + bed' },
+  { index: '02', name: 'Adjacency', detail: 'edge / CSR' },
+  { index: '03', name: 'Shaders', detail: 'GLSL → SPIR-V' },
+  { index: '04', name: 'Snapshots', detail: 'depth + momentum' },
+];
+
+const benchmarks = [
+  { name: 'Lake at rest', contract: 'C-property / well-balancedness', state: 'Harness ready', tone: 'ready' },
+  { name: 'Analytical dam-break', contract: '1D reference solution', state: 'Harness ready', tone: 'ready' },
+  { name: 'Radial dam-break', contract: 'axisymmetric spread', state: 'Harness ready', tone: 'ready' },
+  { name: 'Floodplain depressions', contract: 'bathymetry response', state: 'Harness ready', tone: 'ready' },
+  { name: 'Momentum obstruction', contract: 'flow around barriers', state: 'Harness ready', tone: 'ready' },
+  { name: 'Flood propagation', contract: 'wetting front', state: 'Harness ready', tone: 'ready' },
+];
+
+const runtimes = [
+  { name: 'Docker Compose', detail: 'development + checks', mark: '01' },
+  { name: 'Apptainer', detail: 'Linux NVIDIA production', mark: '02' },
+  { name: 'MoltenVK', detail: 'macOS correctness path', mark: '03' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="GPU-accelerated shallow-water flood modelling on polygonal meshes." />
+    <title>deceris-inundation — GPU shallow-water solver</title>
+  </head>
+  <body id="top">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header shell">
+      <a class="wordmark" href="#top" aria-label="deceris-inundation home">
+        <span class="wordmark-mark" aria-hidden="true">d<span>·</span>i</span>
+        <span>deceris-inundation</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#mechanism">Mechanism</a>
+        <a href="#proof">Benchmarks</a>
+        <a href="#reproduce">Reproduce</a>
+        <a class="nav-repo" href={repositoryUrl} target="_blank" rel="noreferrer">Repository <span aria-hidden="true">↗</span></a>
+      </nav>
+      <a class="mobile-repo" href={repositoryUrl} target="_blank" rel="noreferrer" aria-label="Open repository">↗</a>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <h1 id="hero-title">Flood modelling,<br /><em>on the mesh.</em></h1>
+          <p class="hero-lede">GPU-accelerated inundation simulation for polygonal meshes. NumPy prepares the geometry; Vulkan compute runs the physics.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href={repositoryUrl} target="_blank" rel="noreferrer">View repository <span aria-hidden="true">↗</span></a>
+            <a class="button button-text" href="https://deceris.io" target="_blank" rel="noreferrer">Built for deceris.io <span aria-hidden="true">↗</span></a>
+          </div>
+          <div class="hero-note"><span class="status-dot" aria-hidden="true"></span> Python API · Vulkan / Kompute · polygonal cells</div>
+        </div>
+
+        <div class="hero-figure">
+          <div class="figure-label figure-label-top">MESH FIELD / 01</div>
+          <svg viewBox="0 0 620 470" role="img" aria-label="Schematic polygon mesh with a propagating flood front. Annotations: z_mean, h plus hu, eta equals h plus zb, CSR slash Hilbert order.">
+            <g class="mesh-lines">
+              <path d="M16 77 L126 40 L231 84 L338 35 L459 83 L602 46" />
+              <path d="M16 77 L51 177 L145 149 L231 84 L265 188 L365 151 L459 83 L507 191 L602 46" />
+              <path d="M51 177 L17 300 L124 273 L265 188 L236 315 L365 151 L407 276 L507 191 L602 315" />
+              <path d="M17 300 L68 418 L236 315 L300 451 L407 276 L474 416 L602 315 L578 449" />
+              <path d="M124 273 L68 418 M236 315 L124 273 M407 276 L236 315 M474 416 L407 276 M602 315 L578 449" />
+            </g>
+            <g class="mesh-flood">
+              <path d="M20 300 L124 273 L236 315 L300 451 L68 418 Z" />
+              <path d="M124 273 L265 188 L365 151 L407 276 L236 315 Z" />
+              <path d="M407 276 L507 191 L602 315 L474 416 Z" />
+            </g>
+            <g class="mesh-nodes">
+              <circle cx="51" cy="177" r="5" /><circle cx="145" cy="149" r="5" /><circle cx="265" cy="188" r="5" /><circle cx="365" cy="151" r="5" /><circle cx="507" cy="191" r="5" />
+              <circle cx="124" cy="273" r="5" /><circle cx="236" cy="315" r="5" /><circle cx="407" cy="276" r="5" /><circle cx="474" cy="416" r="5" />
+            </g>
+            <g class="mesh-annotation">
+              <path d="M145 149 L145 96 L207 96" />
+              <text x="215" y="100">z_mean</text>
+              <path d="M407 276 L507 353 L579 353" />
+              <text x="518" y="347">h + hu</text>
+            </g>
+          </svg>
+          <div class="figure-label figure-label-bottom"><span>η = h + z<sub>b</sub></span><span>CSR / HILBERT</span></div>
+        </div>
+      </section>
+
+      <section class="pipeline shell" aria-label="Solver pipeline">
+        {pipeline.map((step, index) => (
+          <div class="pipeline-step" data-step={index + 1}>
+            <span class="pipeline-index">{step.index}</span>
+            <div><strong>{step.name}</strong><small>{step.detail}</small></div>
+          </div>
+        ))}
+      </section>
+
+      <section class="proof-intro shell" id="proof" aria-labelledby="proof-title">
+        <div class="section-heading">
+          <h2 id="proof-title">The first question is not<br /><em>how fast?</em> It is <em>still.</em></h2>
+        </div>
+        <div class="section-aside">
+          <p>The lake-at-rest benchmark checks the C-property: a still free surface over a smooth Gaussian bed must generate no spurious momentum.</p>
+          <a class="inline-link" href="#benchmarks">Read the benchmark contracts <span aria-hidden="true">↓</span></a>
+        </div>
+      </section>
+
+      <section class="lake-panel shell" aria-label="Lake at rest benchmark">
+        <div class="lake-diagram">
+          <div class="diagram-topline"><span>LAKE AT REST / C-PROPERTY</span><span>GATE 01</span></div>
+          <div class="waterline"><span>η = h + z<sub>b</sub> = const.</span></div>
+          <svg viewBox="0 0 640 220" role="img" aria-label="A still free surface over a Gaussian bed bump">
+            <path class="surface-line" d="M22 69 C145 69 172 69 244 69 C312 69 323 19 390 19 C457 19 468 69 618 69" />
+            <path class="bed-line" d="M22 150 C155 150 183 146 245 136 C295 128 320 66 390 66 C460 66 485 128 535 136 C597 146 613 150 618 150" />
+            <path class="depth-line" d="M92 69 L92 145 M92 69 L105 82 M92 69 L79 82 M92 145 L105 132 M92 145 L79 132" />
+            <path class="bed-axis" d="M22 150 H618" />
+            <text x="108" y="113">h</text><text x="413" y="105">z<tspan baseline-shift="sub" font-size="11">b</tspan></text>
+            <circle class="surface-node" cx="390" cy="19" r="5" />
+          </svg>
+          <div class="diagram-foot"><span>pressure ↔ bed-slope source</span><span class="gate-badge">well-balanced</span></div>
+        </div>
+        <div class="lake-copy">
+          <h3>Correctness has a shape.</h3>
+          <p>Each run measures peak spurious discharge, peak spurious velocity, and volume drift. A CFL blow-up is recorded as a flagged result row instead of disappearing into a crash.</p>
+          <dl class="metric-list">
+            <div><dt>reference backend</dt><dd>fixed_dt_batch_barrier</dd></div>
+            <div><dt>fully resident backend</dt><dd>gpu_resident_batch</dd></div>
+            <div><dt>result ingest</dt><dd class="pending"><span></span> pending</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="benchmark-list shell" id="benchmarks" aria-labelledby="benchmarks-title">
+        <div class="list-header">
+          <h2 id="benchmarks-title">Six contracts.<br /><em>One ledger.</em></h2>
+          <p>Harnesses live beside the solver. The report layer is rebuilt here from their outputs; no performance number is presented before its source is selected.</p>
+        </div>
+        <div class="benchmark-rows">
+          {benchmarks.map((benchmark, index) => (
+            <div class="benchmark-row">
+              <span class="row-index">{String(index + 1).padStart(2, '0')}</span>
+              <strong>{benchmark.name}</strong>
+              <span class="row-contract">{benchmark.contract}</span>
+              <span class={`row-state ${benchmark.tone}`}>{benchmark.state}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section class="mechanism shell" id="mechanism" aria-labelledby="mechanism-title">
+        <div class="mechanism-heading">
+          <h2 id="mechanism-title">A solver you can<br /><em>trace end to end.</em></h2>
+        </div>
+        <div class="mechanism-grid">
+          <article>
+            <span class="article-mark">A</span>
+            <h3>Geometry stays explicit.</h3>
+            <p>Load <code>.gpkg</code>, <code>.shp</code>, <code>.parquet</code>, <code>.geoparquet</code>, or <code>.obj</code> meshes. Build edge and CSR adjacency, optionally Hilbert-reorder and cache it.</p>
+          </article>
+          <article>
+            <span class="article-mark">B</span>
+            <h3>Physics stays staged.</h3>
+            <p>GLSL becomes SPIR-V. HLLC flux, source, update, and CFL stages run as Vulkan compute through Kompute—not as a black-box raster pass.</p>
+          </article>
+          <article>
+            <span class="article-mark">C</span>
+            <h3>Outputs stay inspectable.</h3>
+            <p>Download depth snapshots at a configured cadence, with optional momentum snapshots. Reuse processed geometry with <code>geometry_cache_dir</code>.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="reproduce shell" id="reproduce" aria-labelledby="reproduce-title">
+        <div class="reproduce-copy">
+          <h2 id="reproduce-title">Prepare once.<br /><em>Run deliberately.</em></h2>
+          <p>The public API keeps the workflow visible: configure a mesh, call <code>prepare()</code>, then run simulation phases. The order is part of the contract.</p>
+          <div class="code-block">
+            <div class="code-top"><span>python</span><button type="button" data-copy aria-label="Copy Python example">copy</button></div>
+            <span class="visually-hidden" role="status" data-copy-status></span>
+            <pre tabindex="0" aria-label="Python workflow example: configure, prepare, then run"><code><span class="code-var">workflow</span><span class="code-punct"> = </span><span class="code-class">SWEWorkflow</span><span class="code-punct">(</span><span class="code-param">config</span><span class="code-punct">)</span>
+<span class="code-var">workflow</span><span class="code-punct">.</span><span class="code-fn">prepare</span><span class="code-punct">()</span>
+<span class="code-var">result</span><span class="code-punct"> = </span><span class="code-var">workflow</span><span class="code-punct">.</span><span class="code-fn">run</span><span class="code-punct">(</span><span class="code-param">phases</span><span class="code-punct">)</span></code></pre>
+          </div>
+        </div>
+        <div class="runtime-list" aria-label="Supported runtime paths">
+          <div class="runtime-heading">Execution paths</div>
+          {runtimes.map((runtime) => (
+            <div class="runtime-row"><span>{runtime.mark}</span><strong>{runtime.name}</strong><small>{runtime.detail}</small></div>
+          ))}
+          <p class="runtime-note">Linux NVIDIA nodes are the production GPU environment. The macOS / MoltenVK path is for development and correctness checks.</p>
+        </div>
+      </section>
+
+      <section class="close shell" id="repository" aria-labelledby="close-title">
+        <div class="close-rule"></div>
+        <div class="close-layout">
+          <h2 id="close-title">Follow the water<br /><em>to the source.</em></h2>
+          <div>
+            <p>Read the implementation, run the harnesses, or see the platform that carries inundation into the field.</p>
+            <div class="close-actions">
+              <a class="button button-primary" href={repositoryUrl} target="_blank" rel="noreferrer">Open GitHub repository <span aria-hidden="true">↗</span></a>
+              <a class="inline-link" href="https://deceris.io" target="_blank" rel="noreferrer">Visit deceris.io <span aria-hidden="true">↗</span></a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell">
+      <span>deceris-inundation</span>
+      <span>GPU shallow-water on polygonal meshes</span>
+      <a href="#top">Back to top ↑</a>
+    </footer>
+
+    <script>
+      const copyButton = document.querySelector('[data-copy]');
+      const copyStatus = document.querySelector('[data-copy-status]');
+      const copyText = async () => {
+        const command = 'workflow = SWEWorkflow(config)\nworkflow.prepare()\nresult = workflow.run(phases)';
+        try {
+          if (!navigator.clipboard?.writeText) {
+            return false;
+          }
+          await navigator.clipboard.writeText(command);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      copyButton?.addEventListener('click', async () => {
+        const copied = await copyText();
+        copyButton.textContent = copied ? 'copied' : 'copy failed';
+        copyButton.setAttribute('aria-label', copied ? 'Copied Python example' : 'Copy failed; select the command manually');
+        if (copyStatus) {
+          copyStatus.textContent = copied ? 'Python example copied to clipboard.' : 'Copy failed. Select the command manually.';
+        }
+        window.setTimeout(() => {
+          copyButton.textContent = 'copy';
+          copyButton.setAttribute('aria-label', 'Copy Python example');
+        }, 1800);
+      });
+    </script>
+  </body>
+</html>
+
+<style is:global>
+  @import url('/src/styles/global.css');
+</style>

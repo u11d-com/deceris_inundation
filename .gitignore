@@ -32,3 +32,16 @@ inundation/results/
 # tracked under benchmark_assets/. Keep this ignore for the optional external
 # archive only.
 Benchmarking_Model_Data/
+
+# Node / frontend — defense in depth. landing/.gitignore covers landing/ in
+# detail; these generics protect any current/future JS/TS folder (e.g.
+# .opencode/node_modules) without depending on nested gitignores.
+node_modules/
+dist/
+.astro/
+.env
+.env.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

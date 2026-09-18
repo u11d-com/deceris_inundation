@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-17T19:44:00Z",
+  "title": "Design System: deceris-inundation landing",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "#f5f7f3", "tonalRamp": ["#f5f7f3", "#e8ece6", "#c9d0c8"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#111613", "tonalRamp": ["#111613", "#38403a", "#667069"] },
+      "acid": { "role": "primary", "displayName": "Field acid", "canonical": "#c8f05a", "tonalRamp": ["#c8f05a", "#4f7000", "#315000"] },
+      "water": { "role": "secondary", "displayName": "Water", "canonical": "#b9d9d1", "tonalRamp": ["#b9d9d1", "#80b8ad", "#53635a"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Workhorse Sans", "purpose": "Large propositions and section theses." },
+      "label": { "displayName": "Measurement Mono", "purpose": "Backend names, equations, formats, and status labels." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "rise-in", "value": "cubic-bezier(.16, 1, .3, 1)", "purpose": "Hero copy enters from a visible offset with a short blur." },
+      { "name": "field-reveal", "value": "cubic-bezier(.16, 1, .3, 1)", "purpose": "Mesh field reveals as a single authored moment." },
+      { "name": "control-hover", "value": "ease", "purpose": "Buttons lift by 2px on hover." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "850px" },
+      { "name": "phone", "value": "540px" }
+    ],
+    "rules": {
+      "signal": "#c8f05a is reserved for action, selected proof state, and key emphasis.",
+      "flatField": "Use tonal layers and 1px rules instead of shadows.",
+      "proof": "Un-ingested benchmark results remain visibly pending."
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single high-salience action on a surface.",
+      "html": "<a class=\"button button-primary\" href=\"#repository\">View repository ↗</a>",
+      "css": ".button-primary { color: #111613; background: #c8f05a; border: 1px solid #c8f05a; min-height: 47px; padding: 0 17px; } .button-primary:hover { color: #c8f05a; background: #111613; border-color: #111613; transform: translateY(-2px); }"
+    },
+    {
+      "name": "Pipeline Strip",
+      "kind": "custom",
+      "description": "Four ruled stages make the solver mechanism visible before the proof chapter.",
+      "html": "<section class=\"pipeline\"><div class=\"pipeline-step\">Mesh</div><div class=\"pipeline-step\">Adjacency</div><div class=\"pipeline-step\">Shaders</div><div class=\"pipeline-step\">Snapshots</div></section>",
+      "css": ".pipeline { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid #c9d0c8; border-bottom: 1px solid #c9d0c8; } .pipeline-step { min-height: 90px; border-right: 1px solid #c9d0c8; }"
+    },
+    {
+      "name": "Benchmark Ledger",
+      "kind": "custom",
+      "description": "A dark correctness diagram followed by a ruled list of harness contracts.",
+      "html": "<div class=\"benchmark-row\"><span>01</span><strong>Lake at rest</strong><span>Harness ready</span></div>",
+      "css": ".benchmark-row { display: grid; grid-template-columns: 55px 1fr 1fr 130px; min-height: 63px; border-bottom: 1px solid #c9d0c8; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Traceable Field",
+    "overview": "A light technical field where the solver shows its mechanism and evidence without decorative distance. One acid signal marks action and verification; ink, water tones, and rules carry the rest.",
+    "keyCharacteristics": ["Light paper ground", "Ink-first hierarchy", "One functional accent", "Traceable diagrams", "Explicit pending states"],
+    "rules": [
+      { "name": "The One Signal Rule", "body": "Use chartreuse only for action, selected proof, or key emphasis.", "section": "colors" },
+      { "name": "The Flat Field Rule", "body": "Use tonal layering and 1px rules instead of ornamental shadow.", "section": "elevation" },
+      { "name": "The Weight Rule", "body": "Use scale and weight for emphasis; reserve mono for measurement and execution vocabulary.", "section": "typography" }
+    ],
+    "dos": ["Keep the repository action obvious.", "Show the solver pipeline as real product vocabulary.", "Label un-ingested evidence as pending."],
+    "donts": ["Do not invent benchmark outcomes or commercial proof.", "Do not replace polygon geometry with generic raster imagery.", "Do not add gradient, glass, or rounded card-stack conventions."]
+  }
+}
