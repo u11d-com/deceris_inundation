@@ -5,19 +5,27 @@ NumPy preprocesses the mesh; Kompute dispatches the Vulkan compute shaders.
 
 ## How it works
 
-The runtime pipeline is:
+`SWEWorkflow` has two stages: preparation and simulation.
 
-1. Load mesh cells and required bed elevations.
-2. Build edge and CSR adjacency, then optionally Hilbert-reorder and cache it.
-3. Compile the GLSL compute shaders to SPIR-V.
-4. Run HLLC flux, source, update, and CFL stages through a Vulkan solver.
-5. Download depth snapshots at the configured cadence; optionally download momentum snapshots when enabled.
+1. **Prepare the mesh.** Read polygon cells and bed elevations from GeoPackage,
+   Shapefile, Parquet/GeoParquet, or OBJ input.
+2. **Build the geometry.** NumPy computes cell and edge geometry plus signed
+   adjacency. The result can be Hilbert-reordered and cached for reuse.
+3. **Prepare the GPU.** Compile the GLSL kernels to SPIR-V, allocate Vulkan
+   buffers, and upload the initial state and mesh data.
+4. **Run the simulation.** For each timestep, Vulkan computes HLLC edge fluxes,
+   applies source terms, updates depth and momentum, and periodically estimates
+   a stable CFL timestep.
+5. **Return results.** The workflow records depth snapshots at the configured
+   output interval and can optionally capture momentum snapshots.
 
-`fixed_dt_batch_barrier` is the validated reference implementation. The
-`gpu_resident_batch` implementation reduces host synchronization. The public
-Python API is `SWEWorkflow`, `WorkflowConfig`, `SimulationPhase`,
-`PointSource`, and `WorkflowResult` from the top-level `inundation` package
-(distribution name `deceris-inundation`).
+Call `prepare()` once before `run()`. `run()` advances one or more
+`SimulationPhase` objects and returns a `WorkflowResult`.
+
+`fixed_dt_batch_barrier` is the validated reference implementation.
+`gpu_resident_batch` reduces host synchronization for GPU-resident runs. The
+top-level `inundation` package exports `SWEWorkflow`, `WorkflowConfig`,
+`SimulationPhase`, `PointSource`, and `WorkflowResult`.
 
 ## Supported runtime
 
