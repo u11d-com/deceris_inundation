@@ -19,25 +19,25 @@ from ..tuning import MIN_POLYGON_VERTICES
 
 def load_mesh_file(
     path: str,
-) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32], NDArray[np.float32] | None]:
-    """Load a polygonal mesh from a .gpkg, .shp, .parquet, .geoparquet, or .obj file.
+) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
+    """Load a polygonal mesh and required per-cell bed elevations.
 
     Accepts triangles, quads, and arbitrary convex polygons.
 
     .gpkg / .shp / .parquet / .geoparquet :
                    each feature must be a simple polygon (convex recommended).
                    .parquet / .geoparquet use pyarrow + shapely only (no geopandas).
-                   .gpkg / .shp require geopandas  (pip install geopandas).
-                   The optional ``z_mean`` column is used as bed elevation.
-    .obj         : Wavefront OBJ; 'v x y [z]' and 'f i j k [l ...]' tokens.
-                   Z coordinate is ignored.
+                   .gpkg / .shp require geopandas (pip install geopandas).
+                   All GIS formats require a ``z_mean`` bed-elevation column.
+    .obj         : Wavefront OBJ; every ``v`` record must include Z. Face
+                   vertex elevations are averaged into per-cell bed elevations.
 
     Returns
     -------
     verts        : (V, 2) float32   vertex (x, y) coordinates
     faces        : (sum_of_degrees,) int32  flat vertex indices for all faces
     face_offsets : (N+1,) int32  face i has verts faces[face_offsets[i]:face_offsets[i+1]]
-    zb_from_file : (N,) float32 or None  per-cell bed elevation attribute
+    zb_from_file : (N,) float32  required per-cell bed elevations
 
     """
     import os as _os
@@ -64,7 +64,7 @@ def load_mesh_file(
         for geom in geoms:
             if geom is None:
                 continue
-            coords = list(geom.exterior.coords)[:-1]  # drop closing duplicate
+            coords = list(geom.exterior.coords)[:-1]
             if len(coords) < MIN_POLYGON_VERTICES:
                 raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
             face_idx = []
@@ -81,12 +81,11 @@ def load_mesh_file(
                 f"Mesh file '{path}' contains no valid polygon geometries "
                 f"({table.num_rows} rows, {int(not_null.sum())} non-null geometries)."
             )
-
-        zb_vals = (
-            table.column("z_mean").to_numpy(zero_copy_only=False)[not_null].astype(np.float32)
-            if "z_mean" in table.column_names
-            else None
-        )
+        if "z_mean" not in table.column_names:
+            raise ValueError(f"Mesh file '{path}' is missing required 'z_mean' bed elevations")
+        zb_vals = table.column("z_mean").to_numpy(zero_copy_only=False)[not_null].astype(np.float32)
+        if not np.isfinite(zb_vals).all():
+            raise ValueError(f"Mesh file '{path}' contains non-finite 'z_mean' elevations")
 
         verts = np.array(all_coords, dtype=np.float32)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
@@ -106,7 +105,7 @@ def load_mesh_file(
         for geom in gdf.geometry:
             if geom is None:
                 continue
-            coords = list(geom.exterior.coords)[:-1]  # drop closing duplicate
+            coords = list(geom.exterior.coords)[:-1]
             if len(coords) < MIN_POLYGON_VERTICES:
                 raise ValueError(f"Geometry has {len(coords)} vertices — need at least 3.")
             face_idx = []
@@ -125,12 +124,11 @@ def load_mesh_file(
                 f"Mesh file '{path}' contains no valid polygon geometries "
                 f"({n_rows} rows, {n_valid} non-null geometries)."
             )
-
-        zb_vals = (
-            gdf.loc[gdf.geometry.notna(), "z_mean"].to_numpy(dtype=np.float32)
-            if "z_mean" in gdf.columns
-            else None
-        )
+        if "z_mean" not in gdf.columns:
+            raise ValueError(f"Mesh file '{path}' is missing required 'z_mean' bed elevations")
+        zb_vals = gdf.loc[gdf.geometry.notna(), "z_mean"].to_numpy(dtype=np.float32)
+        if not np.isfinite(zb_vals).all():
+            raise ValueError(f"Mesh file '{path}' contains non-finite 'z_mean' elevations")
 
         verts = np.array(all_coords, dtype=np.float32)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
@@ -142,6 +140,7 @@ def load_mesh_file(
 
     if ext == ".obj":
         vert_list: list[list[float]] = []
+        vert_z: list[float] = []
         faces_list: list[list[int]] = []
         with open(path) as fh:
             for line in fh:
@@ -149,7 +148,12 @@ def load_mesh_file(
                 if not parts or parts[0].startswith("#"):
                     continue
                 if parts[0] == "v":
+                    if len(parts) < 4:
+                        raise ValueError(
+                            f"OBJ file '{path}' has a vertex without required Z elevation"
+                        )
                     vert_list.append([float(parts[1]), float(parts[2])])
+                    vert_z.append(float(parts[3]))
                 elif parts[0] == "f":
                     idx = [int(p.split("/")[0]) - 1 for p in parts[1:]]
                     if len(idx) < MIN_POLYGON_VERTICES:
@@ -158,14 +162,18 @@ def load_mesh_file(
 
         if not faces_list:
             raise ValueError(f"OBJ file '{path}' contains no face ('f') records.")
+        vertex_z = np.asarray(vert_z, dtype=np.float32)
+        if not np.isfinite(vertex_z).all():
+            raise ValueError(f"OBJ file '{path}' contains non-finite vertex elevations")
 
         verts = np.array(vert_list, dtype=np.float32)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
         offsets = np.zeros(len(faces_list) + 1, dtype=np.int32)
         for i, f in enumerate(faces_list):
             offsets[i + 1] = offsets[i] + len(f)
+        zb_vals = np.asarray([vertex_z[f].mean() for f in faces_list], dtype=np.float32)
 
-        return verts, faces_flat, offsets, None
+        return verts, faces_flat, offsets, zb_vals
 
     raise ValueError(
         f"Unsupported format: '{ext}'. Supported: .gpkg, .shp, .parquet, .geoparquet, .obj"

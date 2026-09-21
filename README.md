@@ -7,7 +7,7 @@ NumPy preprocesses the mesh; Kompute dispatches the Vulkan compute shaders.
 
 The runtime pipeline is:
 
-1. Load mesh cells and optional bed elevations.
+1. Load mesh cells and required bed elevations.
 2. Build edge and CSR adjacency, then optionally Hilbert-reorder and cache it.
 3. Compile the GLSL compute shaders to SPIR-V.
 4. Run HLLC flux, source, update, and CFL stages through a Vulkan solver.
@@ -101,9 +101,10 @@ recipe and `--nv` passthrough do not apply to macOS.
 ## Running the solver
 
 The workflow accepts `.gpkg`, `.shp`, `.parquet`, `.geoparquet`, and `.obj`
-meshes. Polygon features need at least three vertices. For GIS formats, an
-optional `z_mean` column supplies per-cell bed elevation; OBJ Z coordinates
-are ignored. Without `z_mean`, the bed is initialized at zero.
+meshes. Polygon features need at least three vertices. GIS formats require a
+`z_mean` column supplying per-cell bed elevation; OBJ files require a Z value
+on every vertex, which is averaged per cell. Meshes without elevation data
+are rejected.
 
 Minimal application usage:
 

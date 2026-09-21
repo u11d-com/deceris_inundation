@@ -80,20 +80,20 @@ def _assert_signed_csr_consistent(geom: MeshGeometry, label: str) -> None:
 
 def test_signed_csr_consistent_after_build_geometry() -> None:
     verts, faces = _make_triangulated_grid_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     _assert_signed_csr_consistent(geom, "build_geometry")
 
 
 def test_signed_csr_consistent_after_hilbert_reorder() -> None:
     verts, faces = _make_triangulated_grid_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     reordered, _perm = hilbert_reorder(geom, verbose=False)
     _assert_signed_csr_consistent(reordered, "hilbert_reorder")
 
 
 def test_signed_csr_shapes_match_cell_edge_idx() -> None:
     verts, faces = _make_triangulated_grid_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     assert geom.cell_edge_side.shape == geom.cell_edge_idx.shape
     assert geom.cell_edge_idx_signed.shape == geom.cell_edge_idx.shape
     assert geom.cell_edge_side.dtype == np.int32

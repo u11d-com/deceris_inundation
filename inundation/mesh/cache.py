@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 # Bump whenever build_geometry()/hilbert_reorder() output arrays change
 # shape, dtype, or semantics, so old on-disk caches are rejected instead of
 # silently served with stale/incompatible contents.
-GEOMETRY_CACHE_VERSION = 2
+GEOMETRY_CACHE_VERSION = 3
 
 # Field order matters only for readability; np.savez uses keyword storage.
 _GEOMETRY_ARRAY_FIELDS = (
@@ -155,8 +155,9 @@ def _self_check() -> None:
             ]
 
         faces = np.array([quad(0, 0), quad(1, 0), quad(0, 1), quad(1, 1)], dtype=np.int32)
+        zb = np.zeros(len(faces), dtype=np.float32)
 
-        geom = build_geometry(verts, faces)
+        geom = build_geometry(verts, faces, zb_from_file=zb)
         geom, perm = hilbert_reorder(geom, verbose=False)
 
         cache_dir = tmp_dir / "geom-cache"

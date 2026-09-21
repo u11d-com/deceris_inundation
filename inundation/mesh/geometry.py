@@ -11,8 +11,7 @@ Typical usage
 -------------
     from swe_geometry import build_geometry, hilbert_reorder
 
-    geom = build_geometry(verts, faces, face_offsets, zb_from_file=None)
-    geom, perm = hilbert_reorder(geom)
+    geom = build_geometry(verts, faces, face_offsets, zb_from_file=zb)
 """
 
 import sys
@@ -145,7 +144,8 @@ def build_geometry(
     verts: NDArray[np.float32],
     faces: NDArray[np.int32],
     face_offsets: NDArray[np.int32] | None = None,
-    zb_from_file: NDArray[np.float32] | None = None,
+    *,
+    zb_from_file: NDArray[np.float32],
     progress: bool = False,
 ) -> MeshGeometry:
     """Precompute all geometric quantities from vertex/face arrays.
@@ -160,8 +160,8 @@ def build_geometry(
     face_offsets : (N+1,) int32, optional
         Row pointers: face i uses verts faces[face_offsets[i]:face_offsets[i+1]].
         Required when faces is 1-D.
-    zb_from_file : (N,) float32, optional
-        Per-cell bed elevation.  When None a synthetic sinusoidal bed is used.
+    zb_from_file : (N,) float32
+        Required per-cell bed elevation.
     progress : bool, optional
         Print coarse per-stage timing to stdout. The edge-enumeration and CSR
         stages are Python loops over every cell and edge, so progress remains
@@ -273,12 +273,11 @@ def build_geometry(
 
     # ── Bed elevation ─────────────────────────────────────────────────────────
     _log(f"cell area/centroid done in {time.perf_counter() - _t_stage:.1f}s")
-    if zb_from_file is not None:
-        zb = zb_from_file.astype(np.float32)
-    else:
-        zb = (
-            0.05 * (np.sin(2 * np.pi * centroid[:, 0]) + np.sin(2 * np.pi * centroid[:, 1]))
-        ).astype(np.float32)
+    zb = np.asarray(zb_from_file, dtype=np.float32)
+    if zb.shape != (n,):
+        raise ValueError(f"zb_from_file has shape {zb.shape}, expected ({n},)")
+    if not np.isfinite(zb).all():
+        raise ValueError("zb_from_file must contain only finite values")
 
     # ── Edge enumeration ──────────────────────────────────────────────────────
     _t_stage = time.perf_counter()

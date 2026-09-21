@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pytest
 
 from inundation.mesh.cache import (
     _GEOMETRY_ARRAY_FIELDS,
@@ -41,10 +42,24 @@ def _small_quad_mesh() -> tuple[NDArray[np.float32], NDArray[np.int32]]:
     return verts, faces
 
 
+def test_bed_elevations_are_required() -> None:
+    """Geometry construction rejects meshes without bed elevations."""
+    verts, faces = _small_quad_mesh()
+    with pytest.raises(TypeError, match="zb_from_file"):
+        build_geometry(verts, faces)  # pyright: ignore[reportCallIssue]
+
+
+def test_geometry_defaults_are_explicitly_flat() -> None:
+    """Explicit zero elevations produce a flat bed."""
+    verts, faces = _small_quad_mesh()
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
+    assert np.all(geom.zb == 0.0)
+
+
 def test_geometry_cache_roundtrip() -> None:
     """Cache a geometry, reload it, and diff all arrays/scalars."""
     verts, faces = _small_quad_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     geom, perm = hilbert_reorder(geom, verbose=False)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -67,7 +82,7 @@ def test_geometry_cache_roundtrip() -> None:
 def test_geometry_cache_key_mismatch_misses() -> None:
     """A cache-key mismatch must return None."""
     verts, faces = _small_quad_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     geom, perm = hilbert_reorder(geom, verbose=False)
 
     with tempfile.TemporaryDirectory() as tmp:

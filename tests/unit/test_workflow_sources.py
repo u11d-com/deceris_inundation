@@ -32,7 +32,7 @@ def _two_cell_mesh() -> tuple[NDArray[np.float32], NDArray[np.int32]]:
 
 def test_tiny_radius_selects_containing_cell() -> None:
     verts, faces = _two_cell_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
 
     mask = select_cells_within_radius(
         geom.centroid,
@@ -48,7 +48,7 @@ def test_tiny_radius_selects_containing_cell() -> None:
 
 def test_tiny_radius_inside_cell_does_not_expand_selection() -> None:
     verts, faces = _two_cell_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
 
     mask = select_cells_within_radius(
         geom.centroid,
@@ -64,7 +64,7 @@ def test_tiny_radius_inside_cell_does_not_expand_selection() -> None:
 
 def test_tiny_radius_source_preserves_discharge() -> None:
     verts, faces = _two_cell_mesh()
-    geom = build_geometry(verts, faces)
+    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
     phase = SimulationPhase(
         duration_s=1.0,
         sources=[PointSource(12.0, (0.1, 0.1), 0.01)],

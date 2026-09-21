@@ -891,10 +891,8 @@ def write_mesh_parquet(
     """Write a polygon mesh + per-cell ``z_mean`` bed as a parquet mesh file.
 
     Produces the same WKB-geometry + ``z_mean`` layout ``load_mesh_file``
-    reads back. Needed because ``build_geometry`` substitutes a synthetic
-    sinusoidal bed when the mesh file carries no bed attribute — analytical
-    flat-bed cases must pass zb explicitly. Requires the ``mesh-parquet``
-    extra (pyarrow + shapely).
+    reads back. Callers provide zeros for flat-bed cases or explicit terrain
+    elevations for terrain cases. Requires the ``mesh-parquet`` extra.
     """
     try:
         import pyarrow as pa

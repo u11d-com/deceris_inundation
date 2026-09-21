@@ -479,7 +479,8 @@ class SWEWorkflow:
             # mesh file itself; a cache hit skips both the file read and the
             # Python-loop-heavy build_geometry()/hilbert_reorder() entirely.
             _t_stage = time.perf_counter()
-            verts, faces_flat, face_offsets, zb_from_file = load_mesh_file(self.config.mesh_source)
+            verts, faces_flat, face_offsets, loaded_zb = load_mesh_file(self.config.mesh_source)
+            zb_from_file = loaded_zb
             _log(
                 f"mesh file loaded in {time.perf_counter() - _t_stage:.1f}s "
                 f"({self.config.mesh_source})"
@@ -488,7 +489,7 @@ class SWEWorkflow:
                 verts,
                 faces_flat,
                 face_offsets=face_offsets,
-                zb_from_file=zb_from_file,
+                zb_from_file=loaded_zb,
                 progress=progress,
             )
 

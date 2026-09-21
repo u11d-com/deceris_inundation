@@ -368,11 +368,7 @@ def _reference(spec: PropagationSpec) -> RadialInflowSolution:
 
 
 def _ensure_mesh(spec: PropagationSpec, output_dir: Path) -> Path:
-    """Write the flat-bed mesh (idempotent per resolution).
-
-    The bed must be written explicitly: ``build_geometry`` substitutes a
-    synthetic sinusoidal bed when a mesh file carries no bed attribute.
-    """
+    """Write the explicitly flat-bed mesh required by the benchmark spec."""
     mesh_path = output_dir / f"plain-{spec.nx}x{spec.ny}.parquet"
     if not mesh_path.exists():
         verts, quads = build_channel_mesh(spec.nx, spec.ny, spec.domain_x_m, spec.domain_y_m)
