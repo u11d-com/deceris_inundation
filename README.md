@@ -108,13 +108,21 @@ recipe and `--nv` passthrough do not apply to macOS.
 
 ## Running the solver
 
-The workflow accepts `.gpkg`, `.shp`, `.parquet`, `.geoparquet`, and `.obj`
-meshes. Polygon features need at least three vertices. GIS formats require a
-`z_mean` column supplying per-cell bed elevation; OBJ files require a Z value
-on every vertex, which is averaged per cell. Meshes without elevation data
-are rejected.
+### Install mesh readers
 
-Minimal application usage:
+The base package supports OBJ meshes. Install the extras for GIS mesh input:
+
+```sh
+pip install "deceris-inundation[mesh-parquet,mesh-gis]"
+```
+
+Use `mesh-parquet` for `.parquet` and `.geoparquet` meshes. Use `mesh-gis` for
+`.gpkg` and `.shp` meshes. GIS mesh features need at least three vertices and a
+finite `z_mean` column containing per-cell bed elevations. OBJ files need a Z
+coordinate on every vertex; vertex elevations are averaged per cell. Meshes
+without elevation data are rejected.
+
+### Minimal API usage
 
 ```python
 from inundation import PointSource, SimulationPhase, SWEWorkflow, WorkflowConfig
@@ -137,9 +145,197 @@ result = workflow.run([
 print(result.h_final, result.volume_final_m3)
 ```
 
-`prepare()` must run before `run()`. Set `geometry_cache_dir` in
-`WorkflowConfig` to reuse the processed mesh between runs. See
-`inundation/workflow.py` for the complete configuration surface.
+Call `prepare()` before `run()`. Set `geometry_cache_dir` in
+`WorkflowConfig` to reuse processed geometry between runs.
+
+## Input contracts
+
+`PointSource.center_xy` must already use the mesh coordinate system. The
+workflow does not inspect or reproject source CRS metadata. Source coordinates
+are treated as planar Cartesian coordinates, and `radius_m` uses the mesh
+coordinate units. Do not pass longitude/latitude coordinates when the radius
+is intended to be measured in metres.
+
+`discharge_m3s` is the source's total discharge. For each phase, the workflow
+selects cells whose centroids lie within `radius_m` and also includes the cell
+containing the source point. It distributes the discharge across the selected
+cells in proportion to their areas.
+
+If a source selects no valid cells, the workflow skips it without raising an
+error. Validate source locations against the mesh in the calling application
+before running. `volume_injected_m3` is calculated from the requested source
+schedule, so it can include discharge from a source that selected no cells.
+
+The public workflow API currently represents inflow with volumetric point
+sources. It does not expose explicit open-boundary forcing. Mesh boundaries
+use the solver's wall treatment.
+
+`dt_max` is the maximum numerical timestep, not the snapshot interval.
+`output_interval_s` controls depth snapshot timing. `cfl_interval` controls how
+many steps may reuse a CFL estimate: larger values reduce overhead but react
+more slowly to changing flow. Choose these values for the mesh resolution,
+velocities, source rates, and solver backend.
+
+## State and ordering
+
+`WorkflowConfig.initial_state_source` accepts a dictionary or `.npz`, `.npy`,
+`.csv`, and `.parquet` files. CSV and Parquet state tables require `pandas`.
+The accepted fields are:
+
+- `h` or `wse` for water depth or water-surface elevation;
+- `hu` and `hv`, or `u` and `v`, for momentum or velocity;
+- optional `n_mann` for per-cell Manning roughness;
+- optional integer `cell_id` for explicit row-to-cell alignment.
+
+Every per-cell field must contain exactly one finite value per mesh cell.
+`h` takes precedence when both `h` and `wse` are present. Negative depths are
+clamped to zero, momentum is cleared in dry cells, and `n_mann` is floored at
+`1e-4`.
+
+The default `initial_state_order` is `"solver"`. With Hilbert reordering,
+`workflow.perm` satisfies:
+
+```text
+perm[solver_index] = original_mesh_index
+```
+
+Use `initial_state_order="original"` when input arrays follow mesh-file order.
+To map final solver output back to mesh-file order for GIS export:
+
+```python
+import numpy as np
+
+if workflow.perm is None:
+    raise RuntimeError("workflow was not prepared")
+h_original = np.empty_like(result.h_final)
+h_original[workflow.perm] = result.h_final
+```
+
+State files contain hydraulic arrays, not schedule or clock state. Metadata such
+as `t_end_s`, `dt_max`, and `cfl_interval` is ignored when loading a state. A
+new `run()` starts its `snap_times` at zero; callers must manage absolute time
+and hydrograph continuation.
+
+## GIS application example
+
+The following pattern matches a common GeoParquet-mesh and Shapefile-source
+workflow. The application must verify CRS consistency before constructing
+`PointSource` objects; the solver will not reproject them.
+
+```python
+from pathlib import Path
+
+import geopandas as gpd
+import numpy as np
+import pyarrow.parquet as pq
+from shapely import from_wkb
+
+from inundation import PointSource, SimulationPhase, SWEWorkflow, WorkflowConfig
+
+mesh_path = Path("mesh.parquet")
+source_path = Path("sources.shp")
+mesh_crs = "EPSG:2180"  # verify this against the mesh and source coordinates
+source_gdf = gpd.read_file(source_path)
+if source_gdf.empty or "inflow" not in source_gdf:
+    raise ValueError("sources must contain Point geometries and an inflow column")
+
+# If CRS metadata is wrong but coordinates are already in mesh units, correct
+# the metadata only after verifying the stored coordinates. Do not call to_crs()
+# unless the coordinates actually need transformation.
+# source_gdf = source_gdf.set_crs(mesh_crs, allow_override=True)
+
+sources = []
+for index, row in source_gdf.iterrows():
+    point = row.geometry
+    if point is None or point.geom_type != "Point" or not np.isfinite(row.inflow):
+        raise ValueError(f"invalid source row {index}")
+    sources.append(
+        PointSource(
+            discharge_m3s=float(row.inflow),
+            center_xy=(float(point.x), float(point.y)),
+            radius_m=5.0,
+        )
+    )
+
+workflow = SWEWorkflow(
+    WorkflowConfig(
+        mesh_source=str(mesh_path),
+        manning_n=0.035,
+        output_interval_s=1200.0,
+        dt_max=2.0,
+        cfl_interval=1000,
+        geometry_cache_dir=".deceris-cache",
+        initial_state_source="state.npz",  # omit for a dry initial state
+        initial_state_order="solver",
+        solver_impl="gpu_resident_batch",
+    )
+)
+workflow.prepare()
+result = workflow.run([
+    SimulationPhase(duration_s=12 * 3600.0, sources=sources),
+])
+
+if workflow.perm is None:
+    raise RuntimeError("workflow was not prepared")
+h_original = np.empty_like(result.h_final)
+h_original[workflow.perm] = result.h_final
+
+# Re-read the original mesh geometry for GIS export. The solver returns arrays,
+# not GeoDataFrame geometry or CRS metadata.
+table = pq.read_table(mesh_path, columns=["tri_id", "z_mean", "geometry"])
+geometry = from_wkb(table.column("geometry").to_numpy(zero_copy_only=False))
+bed = table.column("z_mean").to_numpy(zero_copy_only=False)
+wet = h_original > workflow.config.dry_tol
+gpd.GeoDataFrame(
+    {
+        "tri_id": table.column("tri_id").to_numpy(zero_copy_only=False)[wet],
+        "depth_m": h_original[wet],
+        "water_lvl": (bed[wet] + h_original[wet]),
+    },
+    geometry=geometry[wet],
+    crs=mesh_crs,
+).to_file("inundation-final.shp", index=False)
+```
+
+## Workflow results
+
+`WorkflowResult` contains:
+
+- `snapshots` and `snap_times`: depth arrays and their simulation times;
+- `h_final`: final depth in solver order;
+- `hu_final` and `hv_final`: final momentum in solver order, when exposed by
+  the backend;
+- `hu_snapshots` and `hv_snapshots`: optional momentum arrays aligned with
+  `snapshots`;
+- `volume_final_m3` and `volume_injected_m3`: final and scheduled source
+  volumes;
+- `wall_seconds` and `steps_total`: runtime measurements;
+- `clamp_mass_m3`: optional volume added by the positivity clamp when
+  `track_clamp_mass=True`.
+
+## Backends
+
+Select a backend with `WorkflowConfig.solver_impl`:
+
+| Backend | Use |
+| --- | --- |
+| `baseline` | Default compatibility and debugging path. |
+| `fixed_dt_batch_barrier` | Validated correctness reference with explicit dispatch barriers. |
+| `device_cfl` | GPU-side CFL resolution with a host-driven timestep loop. |
+| `gpu_resident_batch` | Preferred production candidate for constant per-phase sources after target-driver validation; minimizes host synchronization. |
+
+`gpu_resident_batch` advances time on the device. Choose output intervals that
+are well represented by the backend's float32 clock; validate snapshot cadence
+on the target Vulkan driver. Use `fixed_dt_batch_barrier` for correctness
+comparisons and `baseline` for debugging.
+
+The remaining implementations are retained for benchmark and advanced
+comparison use. Validate backend behavior on the target Vulkan driver before
+using a performance-oriented path in production.
+
+`hu_final` and `hv_final` are needed to write a complete warm-start state.
+Momentum snapshots require `capture_momentum_snapshots=True` and backend
+support.
 
 ## Benchmarks
 
