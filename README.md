@@ -1,9 +1,29 @@
 # deceris-inundation
 
-GPU-accelerated shallow-water flood modelling on polygonal meshes.
-NumPy preprocesses the mesh; Kompute dispatches the Vulkan compute shaders.
+Flooding is expensive. A single event can shut down roads, damage property,
+and delay construction. Flood risk is hard to judge from a terrain map
+alone: water follows slopes, collects in low ground, and hits places that
+look safe.
+
+Deceris Inundation answers a simple question: "Where will the water go, and how deep will it get?".
+A site, road, or district can be tested under different water
+inputs, such as a swollen river or intense rainfall, and the outcomes
+compared side by side.
+
+It is built for decisions that need numbers. Planners check whether a
+development stays dry, infrastructure teams see which roads stay passable,
+and risk analysts put depth figures on specific locations. Running on the
+graphics processor (GPU) keeps large areas and long events fast enough for
+repeated scenario testing.
 
 ## How it works
+
+In plain terms, the simulation divides the terrain into a grid of connected cells and advances the solution through time. At each step, it computes how
+much water is present in each cell and how water flows between neighboring cells. The underlying physics is described by the Shallow Water Equations,
+a widely used model for simulating the movement of a shallow layer of water over terrain. Fluxes between cells are computed using the HLLC solver, a well-established approximate Riemann solver for this type of flow.
+
+
+## The runtime pipeline
 
 `SWEWorkflow` has two stages: preparation and simulation.
 
