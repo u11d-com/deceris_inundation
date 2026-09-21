@@ -19,24 +19,26 @@ NumPy preprocesses the mesh; Kompute dispatches the Vulkan compute shaders.
 5. **Return results.** The workflow records depth snapshots at the configured
    output interval and can optionally capture momentum snapshots.
 
-Call `prepare()` once before `run()`. `run()` advances one or more
-`SimulationPhase` objects and returns a `WorkflowResult`.
+`run()` advances one or more `SimulationPhase` objects and returns a
+`WorkflowResult`. See `Backends` for solver choices.
 
-`fixed_dt_batch_barrier` is the validated reference implementation.
-`gpu_resident_batch` reduces host synchronization for GPU-resident runs. The
-top-level `inundation` package exports `SWEWorkflow`, `WorkflowConfig`,
-`SimulationPhase`, `PointSource`, and `WorkflowResult`.
+## Prerequisites
+
+- Docker Compose with the `dev` service (`just up`), plus `just`.
+- For GPU runs: a host Vulkan driver and ICD.
+- macOS Vulkan work: Homebrew, Xcode command-line tools
+  (`xcode-select --install`), `uv`.
 
 ## Supported runtime
 
-The supported development environment is Docker Compose. The image contains
-Python 3.12, all optional Python dependencies, Vulkan development tools, and
-the Kompute binding. Source code is bind-mounted into the running container.
+| Host | Path | Use |
+| --- | --- | --- |
+| Linux + NVIDIA | Docker image, or Apptainer with `--nv` passthrough | Production GPU runs |
+| macOS | Native host via MoltenVK (see below) | Development and correctness checks |
 
-For GPU execution, the host must provide a working Vulkan driver and ICD. The
-production path uses an NVIDIA node and Apptainer's `--nv` passthrough. The
-macOS host path is useful for the patched Kompute development setup, but is
-not the production GPU environment.
+The Docker image contains Python 3.12, all optional Python dependencies,
+Vulkan development tools, and the Kompute binding. Source code is
+bind-mounted into the running container.
 
 ## Development setup
 
@@ -62,12 +64,10 @@ bind-mounted repository do not require an image rebuild.
 
 ## macOS development
 
-Docker Desktop on macOS is suitable for repository checks and packaging, but
-it does not provide the host Apple GPU as a Vulkan device inside this Linux
-container. Do not use the default Docker-backed `just benchmark-*` recipes for
-GPU execution on macOS.
-
-Use the native host environment for Vulkan work through MoltenVK:
+Docker Desktop on macOS does not expose the Apple GPU inside the Linux
+container, so use the native host environment for Vulkan work through
+MoltenVK. Do not use the default Docker-backed `just benchmark-*` recipes
+for GPU execution on macOS:
 
 ```sh
 brew install uv cmake molten-vk vulkan-headers vulkan-loader vulkan-tools glslang
@@ -102,9 +102,7 @@ or invoke the host interpreter directly:
   --backend gpu_resident_batch
 ```
 
-The macOS/MoltenVK path is for development and correctness checks. Linux
-NVIDIA nodes remain the production performance environment; the Apptainer
-recipe and `--nv` passthrough do not apply to macOS.
+The Apptainer recipe and `--nv` passthrough do not apply to macOS.
 
 ## Running the solver
 
@@ -139,7 +137,7 @@ workflow.prepare()  # load mesh, compile shaders, allocate Vulkan resources
 result = workflow.run([
     SimulationPhase(
         duration_s=3600.0,
-        sources=[PointSource(10.0, (100.0, 200.0), 2.0)],
+        sources=[PointSource(discharge_m3s=10.0, center_xy=(100.0, 200.0), radius_m=2.0)],
     ),
 ])
 print(result.h_final, result.volume_final_m3)
@@ -275,10 +273,8 @@ result = workflow.run([
     SimulationPhase(duration_s=12 * 3600.0, sources=sources),
 ])
 
-if workflow.perm is None:
-    raise RuntimeError("workflow was not prepared")
 h_original = np.empty_like(result.h_final)
-h_original[workflow.perm] = result.h_final
+h_original[workflow.perm] = result.h_final  # see `State and ordering` for perm semantics
 
 # Re-read the original mesh geometry for GIS export. The solver returns arrays,
 # not GeoDataFrame geometry or CRS metadata.
@@ -339,9 +335,8 @@ support.
 
 ## Benchmarks
 
-On Linux, or when the Docker-backed development environment is available,
-benchmark recipes run inside the development container. On macOS, use the
-native workflow above instead.
+Benchmark recipes run inside the development container (see runtime table
+above). On macOS, use the native `IN_CONTAINER=1` workflow above instead.
 
 ```sh
 just benchmark-lake --help
