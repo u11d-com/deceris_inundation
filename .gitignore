@@ -20,11 +20,6 @@ __pycache__/
 # recipes; also excluded from remote sync workflows).
 inundation/results/
 
-# qmd local SQLite index. Config (index.yml) is committed — project-scoped
-# config uses relative paths. The .sqlite is rebuilt locally via
-# `qmd update` + `qmd embed`.
-.qmd/*.sqlite*
-
 .DS_Store
 
 # Published UK Environment Agency 2D benchmark datasets (May-2010

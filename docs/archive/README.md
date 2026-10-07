@@ -16,9 +16,6 @@ during the 2026-Q3 docs rework.
   linter (`docs/archive/**` in `.pymarkdown` config + `--exclude` glob on
   the `just mdlint` recipe). Editorial decisions about prose line lengths,
   inline HTML, list marker styles, etc. are preserved exactly as written.
-- **QMD isolation**: archive is a separate QMD collection (`docs-archive`,
-  `includeByDefault: false`). Only surface archive results when explicitly
-  queried with `-c docs-archive`.
 
 ## 1:1 path map
 

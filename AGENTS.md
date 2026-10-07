@@ -60,7 +60,8 @@ fingerprint + invariant/compare/deterministic/plot helpers in
 
 ## Documentation
 
-**Rule: never grep, glob, or read `docs/` directly — always use the `qmd` skill.** After adding/moving/renaming any doc, re-run `qmd`'s update/embed step (required, not optional).
+The docs are ordinary markdown — read and grep `docs/` directly. There is no
+search index or doc tooling in this repo.
 
 `docs/` tiers — each answers a different question:
 
@@ -87,6 +88,5 @@ Rules:
 - `architecture/*.md` = current design/requirements only — no embedded
   status prose or result tables. Link to `decisions.md` / `implementation/`
   instead.
-- New top-level `docs/` folder → register in `.qmd/index.yml` and
-  `docs/index.md`'s tree table.
-- Run `just mdlint` after any docs edit, then re-embed via `qmd`.
+- New top-level `docs/` folder → register in `docs/index.md`'s tree table.
+- Run `just mdlint` after any docs edit.
