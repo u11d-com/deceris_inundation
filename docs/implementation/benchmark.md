@@ -10,3 +10,4 @@
 | Hydrostatic correction | done | Lake-at-rest currents reduced below 1e-4 m/s | [`17-audusse-well-balance-correction/`](17-audusse-well-balance-correction/results.md) |
 | Flood propagation | passing | Arrival, depth, speed, and isotropy gates pass; mass drift is a single signed error and the clamp contributes zero | [`18-flood-propagation/`](18-flood-propagation/results.md) |
 | Grid convergence | done | Expected profile order; front bias is discretization error; mass drift changes sign and the clamp contributes zero | [`19-grid-convergence/`](19-grid-convergence/results.md) |
+| Mesh geometry cache artifacts | done | 4000-cell mesh: artifact reloads identical to a direct build; `prepare()` runs with the mesh file deleted (GPU allocation untested — no Vulkan device in the dev container) | [`20-mesh-cache-artifacts/`](20-mesh-cache-artifacts/results.md) |

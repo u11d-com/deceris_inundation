@@ -29,7 +29,8 @@ a widely used model for simulating the movement of a shallow layer of water over
 1. **Prepare the mesh.** Read polygon cells and bed elevations from GeoPackage,
    Shapefile, Parquet/GeoParquet, or OBJ input.
 2. **Build the geometry.** NumPy computes cell and edge geometry plus signed
-   adjacency. The result can be Hilbert-reordered and cached for reuse.
+   adjacency. The result can be Hilbert-reordered and cached for reuse, or
+   loaded prebuilt from a `build_geometry_cache` artifact (no mesh file read).
 3. **Prepare the GPU.** Compile the GLSL kernels to SPIR-V, allocate Vulkan
    buffers, and upload the initial state and mesh data.
 4. **Run the simulation.** For each timestep, Vulkan computes HLLC edge fluxes,
@@ -170,6 +171,43 @@ print(result.h_final, result.volume_final_m3)
 
 Call `prepare()` before `run()`. Set `geometry_cache_dir` in
 `WorkflowConfig` to reuse processed geometry between runs.
+
+To run with no mesh file at all — for jobs that only receive a prebuilt
+geometry artifact — build the artifact once and point `geometry_cache_source`
+at it:
+
+```python
+from inundation.mesh import build_geometry_cache
+
+artifact = build_geometry_cache("mesh.gpkg", "artifacts/mesh.geometry.npz")
+
+workflow = SWEWorkflow(
+    WorkflowConfig(
+        mesh_source=None,  # the artifact is the geometry source
+        geometry_cache_source=artifact,
+        manning_n=0.035,
+        output_interval_s=300.0,
+        dt_max=0.05,
+        cfl_interval=1,
+    )
+)
+```
+
+`build_geometry_cache` runs the full mesh preprocessing chain (load mesh →
+`build_geometry` → Hilbert reorder), needs no GPU, and captures whatever the
+mesh file carries, including a per-cell `manning_n` column. The artifact
+records the cache format version, so one written by a different release is
+rejected rather than silently consumed.
+
+When `geometry_cache_source` is set it wins over `geometry_cache_dir` and
+`mesh_source`, which are then never read, and `mesh_source` may be `None`. The
+artifact's build-time reorder mode is authoritative: it must match
+`WorkflowConfig.use_hilbert_reorder`, and a mismatch is rejected rather than
+silently reordering cells. A foreign cache version raises, whereas the
+directory cache simply misses after a version change. Cache-only workflows
+cannot be plotted — the plotting helpers need the mesh file to reconstruct
+cell polygons. See `inundation/workflow.py` for the complete configuration
+surface.
 
 ## Input contracts
 

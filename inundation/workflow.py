@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 import numpy as np
 
-from .mesh.cache import geometry_cache_key, load_geometry_cache, save_geometry_cache
+from .mesh.cache import (
+    geometry_cache_key,
+    load_geometry_cache,
+    load_geometry_cache_artifact,
+    save_geometry_cache,
+)
 from .mesh.geometry import MeshGeometry, build_geometry, hilbert_reorder
 from .mesh.loader import load_mesh_file
 from .tuning import (
@@ -73,9 +78,15 @@ class SimulationPhase:
 
 @dataclass(frozen=True)
 class WorkflowConfig:
-    """Runtime configuration for SWEWorkflow."""
+    """Runtime configuration for SWEWorkflow.
 
-    mesh_source: str
+    ``mesh_source`` is required unless ``geometry_cache_source`` points at a
+    prebuilt geometry-cache artifact (see ``inundation.mesh.build_geometry_cache``),
+    in which case the mesh file is never opened.
+    """
+
+    # None is only valid together with geometry_cache_source.
+    mesh_source: str | None
     manning_n: float
     output_interval_s: float
     dt_max: float
@@ -95,6 +106,10 @@ class WorkflowConfig:
     # default: it costs an extra buffer write per cell per RK stage.
     track_clamp_mass: bool = False
     geometry_cache_dir: str | os.PathLike[str] | None = None
+    # Prebuilt artifact from inundation.mesh.build_geometry_cache(). When set it
+    # takes precedence over geometry_cache_dir and mesh_source, which are then
+    # never read.
+    geometry_cache_source: str | os.PathLike[str] | None = None
     capture_momentum_snapshots: bool = False
     steps_per_graph: int | None = None
     output_every_steps: int | None = None
@@ -110,6 +125,11 @@ class WorkflowConfig:
 
     def __post_init__(self) -> None:
         """Validate that required solver parameters are within sensible ranges."""
+        if self.mesh_source is None and self.geometry_cache_source is None:
+            raise ValueError(
+                "mesh_source is required unless geometry_cache_source points at a "
+                "prebuilt geometry-cache artifact"
+            )
         if self.manning_n <= 0:
             raise ValueError(f"manning_n must be positive, got {self.manning_n}")
         if self.output_interval_s <= 0:
@@ -456,18 +476,28 @@ class SWEWorkflow:
 
         geom: MeshGeometry | None = None
         perm: NDArray[np.int32] | None = None
-        cache_dir = self.config.geometry_cache_dir
-        cache_key: str = ""
-        if cache_dir is not None:
-            cache_key = geometry_cache_key(
-                self.config.mesh_source, use_hilbert_reorder=self.config.use_hilbert_reorder
+        mesh_source = self.config.mesh_source
+        cache_source = self.config.geometry_cache_source
+
+        if cache_source is not None:
+            # Explicit artifact: the geometry travels on its own, so this path
+            # never opens the mesh file (mesh_source may even be None).
+            geom, perm, cache_meta = load_geometry_cache_artifact(cache_source)
+            if cache_meta.use_hilbert_reorder != self.config.use_hilbert_reorder:
+                # The artifact's build-time order is what the solver would use,
+                # so a mismatch would silently change cell ordering versus the
+                # configured intent. Fail like the version check does.
+                raise ValueError(
+                    f"geometry cache artifact {cache_source} was built with "
+                    f"use_hilbert_reorder={cache_meta.use_hilbert_reorder}, but "
+                    f"WorkflowConfig.use_hilbert_reorder is "
+                    f"{self.config.use_hilbert_reorder} — rebuild the artifact or "
+                    f"match the config"
+                )
+            _log(
+                f"geometry cache artifact loaded ({cache_source}; built from "
+                f"{cache_meta.mesh_source}, hilbert={cache_meta.use_hilbert_reorder})"
             )
-            cached = load_geometry_cache(cache_dir, cache_key)
-            if cached is not None:
-                geom, perm = cached
-                _log(f"geometry cache hit ({cache_dir}/geometry_{cache_key}.npz)")
-            else:
-                _log(f"geometry cache miss ({cache_dir}, key={cache_key[:12]}...) — building")
 
         verts: NDArray[np.float32] | None = None
         faces_flat: NDArray[np.int32] | None = None
@@ -476,41 +506,57 @@ class SWEWorkflow:
         manning_n_from_file: NDArray[np.float32] | None = None
 
         if geom is None:
-            # Cache miss (or caching disabled) — the only path that needs the
-            # mesh file itself; a cache hit skips both the file read and the
-            # Python-loop-heavy build_geometry()/hilbert_reorder() entirely.
-            _t_stage = time.perf_counter()
-            (
-                verts,
-                faces_flat,
-                face_offsets,
-                loaded_zb,
-                manning_n_from_file,
-            ) = load_mesh_file(self.config.mesh_source)
-            zb_from_file = loaded_zb
-            _log(
-                f"mesh file loaded in {time.perf_counter() - _t_stage:.1f}s "
-                f"({self.config.mesh_source})"
-            )
-            geom = build_geometry(
-                verts,
-                faces_flat,
-                face_offsets=face_offsets,
-                zb_from_file=loaded_zb,
-                manning_n_from_file=manning_n_from_file,
-                progress=progress,
-            )
+            if mesh_source is None:
+                # Unreachable: WorkflowConfig.__post_init__ rejects a missing
+                # mesh_source unless geometry_cache_source is set.
+                raise RuntimeError("mesh_source is None without a geometry cache source")
 
-            perm = np.arange(geom.N, dtype=np.int32)
-            if self.config.use_hilbert_reorder:
-                geom, perm = hilbert_reorder(geom, verbose=progress)
-
+            cache_dir = self.config.geometry_cache_dir
+            cache_key = ""
             if cache_dir is not None:
-                _t_stage = time.perf_counter()
-                cache_path = save_geometry_cache(cache_dir, cache_key, geom, perm)
-                _log(
-                    f"geometry cache saved in {time.perf_counter() - _t_stage:.1f}s ({cache_path})"
+                cache_key = geometry_cache_key(
+                    mesh_source, use_hilbert_reorder=self.config.use_hilbert_reorder
                 )
+                cached = load_geometry_cache(cache_dir, cache_key)
+                if cached is not None:
+                    geom, perm = cached
+                    _log(f"geometry cache hit ({cache_dir}/geometry_{cache_key}.npz)")
+                else:
+                    _log(f"geometry cache miss ({cache_dir}, key={cache_key[:12]}...) — building")
+
+            if geom is None:
+                # Cache miss (or caching disabled) — the only path that needs
+                # the mesh file itself.
+                _t_stage = time.perf_counter()
+                (
+                    verts,
+                    faces_flat,
+                    face_offsets,
+                    loaded_zb,
+                    manning_n_from_file,
+                ) = load_mesh_file(mesh_source)
+                zb_from_file = loaded_zb
+                _log(f"mesh file loaded in {time.perf_counter() - _t_stage:.1f}s ({mesh_source})")
+                geom = build_geometry(
+                    verts,
+                    faces_flat,
+                    face_offsets=face_offsets,
+                    zb_from_file=loaded_zb,
+                    manning_n_from_file=manning_n_from_file,
+                    progress=progress,
+                )
+
+                perm = np.arange(geom.N, dtype=np.int32)
+                if self.config.use_hilbert_reorder:
+                    geom, perm = hilbert_reorder(geom, verbose=progress)
+
+                if cache_dir is not None:
+                    _t_stage = time.perf_counter()
+                    cache_path = save_geometry_cache(cache_dir, cache_key, geom, perm)
+                    _log(
+                        f"geometry cache saved in {time.perf_counter() - _t_stage:.1f}s "
+                        f"({cache_path})"
+                    )
 
         if perm is None:
             raise RuntimeError("perm was not set alongside geom — internal prepare() bug")

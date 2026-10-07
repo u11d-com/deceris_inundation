@@ -290,6 +290,33 @@ def build_fingerprint(
     )
 
 
+def _mesh_vertices_for_plot(
+    workflow: SWEWorkflow,
+) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32]]:
+    """Raw (verts, faces, face_offsets) for plotting, re-reading the mesh if needed.
+
+    ``prepare()`` only populates these on the mesh-file path — a geometry-cache
+    hit stores geom+perm alone — so the mesh is re-read here for plotting. A
+    cache-only workflow has no mesh file to fall back on.
+    """
+    verts = workflow.verts
+    faces_flat = workflow.faces_flat
+    face_offsets = workflow.face_offsets
+    if verts is not None and faces_flat is not None and face_offsets is not None:
+        return verts, faces_flat, face_offsets
+
+    mesh_source = workflow.config.mesh_source
+    if mesh_source is None:
+        raise RuntimeError(
+            "plotting needs the original mesh file, but this workflow was prepared "
+            "from a geometry cache artifact (config.mesh_source is None)"
+        )
+    sys.stdout.write(f"[plot] re-loading mesh for plotting: {mesh_source}\n")
+    sys.stdout.flush()
+    verts, faces_flat, face_offsets, _zb, _manning_n = load_mesh_file(mesh_source)
+    return verts, faces_flat, face_offsets
+
+
 def save_depth_png(
     workflow: SWEWorkflow,
     h_final: NDArray[np.float32],
@@ -313,19 +340,7 @@ def save_depth_png(
     if workflow.geom is None or workflow.perm is None:
         raise RuntimeError("Workflow must be prepared before plotting depth")
 
-    verts = workflow.verts
-    faces_flat = workflow.faces_flat
-    face_offsets = workflow.face_offsets
-    if verts is None or faces_flat is None or face_offsets is None:
-        # Geometry-cache hit path (workflow.py's prepare()) skips
-        # load_mesh_file entirely, so verts/faces_flat/face_offsets are never
-        # populated on the workflow — the cached .npz only stores geom+perm,
-        # not raw mesh vertices. Re-read the mesh file just for plotting.
-        sys.stdout.write(f"[plot] re-loading mesh for plotting: {workflow.config.mesh_source}\n")
-        sys.stdout.flush()
-        verts, faces_flat, face_offsets, _zb_from_file, _manning_n = load_mesh_file(
-            workflow.config.mesh_source
-        )
+    verts, faces_flat, face_offsets = _mesh_vertices_for_plot(workflow)
 
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
@@ -377,15 +392,7 @@ def _reordered_polygons(
     """Build per-cell polygons (solver order) + vertex array for plotting."""
     if workflow.geom is None or workflow.perm is None:
         raise RuntimeError("Workflow must be prepared before plotting depth")
-    verts = workflow.verts
-    faces_flat = workflow.faces_flat
-    face_offsets = workflow.face_offsets
-    if verts is None or faces_flat is None or face_offsets is None:
-        # Geometry-cache-hit path skips load_mesh_file, so raw mesh vertices
-        # are never populated on the workflow — re-read just for plotting.
-        verts, faces_flat, face_offsets, _zb, _manning_n = load_mesh_file(
-            workflow.config.mesh_source
-        )
+    verts, faces_flat, face_offsets = _mesh_vertices_for_plot(workflow)
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
     polygons: list[NDArray[np.float32]] = []

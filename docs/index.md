@@ -18,3 +18,4 @@
 - [`17-audusse-well-balance-correction/`](implementation/17-audusse-well-balance-correction/)
 - [`18-flood-propagation/`](implementation/18-flood-propagation/)
 - [`19-grid-convergence/`](implementation/19-grid-convergence/)
+- [`20-mesh-cache-artifacts/`](implementation/20-mesh-cache-artifacts/)

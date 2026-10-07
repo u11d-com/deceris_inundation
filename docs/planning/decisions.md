@@ -46,3 +46,32 @@ Flood-propagation drift worsened under timestep and grid refinement and then
 saturated. This is consistent with small `dt * dh` increments being absorbed
 by float32 state, but remains a hypothesis until a float64 state comparison.
 The 1e-3 mass gate applies only to the measured Test 4 configuration.
+
+## Mesh-sourced Manning roughness
+
+A mesh file may carry a per-cell `manning_n` column (GeoParquet, GeoPackage).
+When present it defines roughness per cell; otherwise `config.manning_n` applies
+uniformly. Precedence is initial-state `n_mann`, then the mesh column, then the
+config value, so a restart keeps the roughness its saved state was calibrated
+with. The column must be finite and positive — rejected rather than clamped —
+and it follows its source cell through `hilbert_reorder` into solver order.
+Absent roughness round-trips through the geometry cache as `None` (stored as an
+empty array), so a reloaded geometry is indistinguishable from one built
+without the column.
+Evidence: [`20-mesh-cache-artifacts/`](../implementation/20-mesh-cache-artifacts/plan.md).
+
+## Geometry cache artifacts: explicit path
+
+A cache-only job gets its geometry from an explicit artifact path
+(`WorkflowConfig.geometry_cache_source`), not from a manifest lookup or a
+content hash of the built arrays: callers that preprocess meshes in an earlier
+pipeline stage own naming and versioning in their own storage layout, and the
+accepted tradeoff is that a mismatched artifact is the caller's problem. The
+one hazard the caller cannot see is checked — the artifact records the cache
+format version and refuses to load under a different `GEOMETRY_CACHE_VERSION`,
+and its build-time reorder mode must match `WorkflowConfig.use_hilbert_reorder`
+(a mismatch is rejected) so cell ordering can never disagree with the caller's
+intent.
+When set, the artifact takes precedence over `geometry_cache_dir` and
+`mesh_source`, which are then never read; `mesh_source` may be `None`.
+Evidence: [`20-mesh-cache-artifacts/`](../implementation/20-mesh-cache-artifacts/results.md).

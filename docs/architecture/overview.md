@@ -7,7 +7,8 @@ Vulkan/Kompute executes the timestep kernels.
 ## Pipeline
 
 1. Load mesh cells and build edge plus CSR adjacency.
-2. Optionally Hilbert-reorder cells and cache the geometry.
+2. Optionally Hilbert-reorder cells and cache the geometry, or load a prebuilt
+   versioned artifact (no mesh file required).
 3. Compile GLSL compute shaders to SPIR-V.
 4. Dispatch flux, update, source, and CFL stages through a selected Vulkan
    synchronization strategy.
@@ -26,9 +27,10 @@ GPU-resident implementation on the lake-at-rest matrix.
 
 ## Mesh and precision constraints
 
-Geometry retains Hilbert ordering, content-keyed caching, dense and CSR
-adjacency, and packed signed edge orientation. CSR offsets are int32 and reject
-meshes whose slot count would overflow. Initial and warm-start states preserve
-depth and both momentum components.
+Geometry retains Hilbert ordering, content-keyed caching plus explicit
+versioned artifacts, optional per-cell mesh-sourced Manning roughness, dense
+and CSR adjacency, and packed signed edge orientation. CSR offsets are int32
+and reject meshes whose slot count would overflow. Initial and warm-start
+states preserve depth, both momentum components, and per-cell roughness.
 
 See `../implementation/00-lake-at-rest/` for retained evidence.
