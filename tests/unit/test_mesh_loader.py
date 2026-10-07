@@ -25,6 +25,7 @@ def test_obj_vertex_elevations_become_cell_elevations(tmp_path: Path) -> None:
     path = tmp_path / "with-z.obj"
     path.write_text("v 0 0 1\nv 1 0 2\nv 0 1 3\nf 1 2 3\n")
 
-    _verts, _faces, _offsets, zb = load_mesh_file(str(path))
+    _verts, _faces, _offsets, zb, manning_n = load_mesh_file(str(path))
 
     np.testing.assert_array_equal(zb, np.array([2.0], dtype=np.float32))
+    assert manning_n is None

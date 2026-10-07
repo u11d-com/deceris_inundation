@@ -323,7 +323,9 @@ def save_depth_png(
         # not raw mesh vertices. Re-read the mesh file just for plotting.
         sys.stdout.write(f"[plot] re-loading mesh for plotting: {workflow.config.mesh_source}\n")
         sys.stdout.flush()
-        verts, faces_flat, face_offsets, _zb_from_file = load_mesh_file(workflow.config.mesh_source)
+        verts, faces_flat, face_offsets, _zb_from_file, _manning_n = load_mesh_file(
+            workflow.config.mesh_source
+        )
 
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
@@ -381,7 +383,9 @@ def _reordered_polygons(
     if verts is None or faces_flat is None or face_offsets is None:
         # Geometry-cache-hit path skips load_mesh_file, so raw mesh vertices
         # are never populated on the workflow — re-read just for plotting.
-        verts, faces_flat, face_offsets, _zb = load_mesh_file(workflow.config.mesh_source)
+        verts, faces_flat, face_offsets, _zb, _manning_n = load_mesh_file(
+            workflow.config.mesh_source
+        )
     perm = workflow.perm
     n_cells = workflow.geom.area.shape[0]
     polygons: list[NDArray[np.float32]] = []

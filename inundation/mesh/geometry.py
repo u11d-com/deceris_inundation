@@ -43,6 +43,7 @@ class MeshGeometry:
     centroid   : (N, 2) float32  - cell centroids
     area       : (N,)   float32  - cell area (shoelace formula)
     zb         : (N,)   float32  - static bed elevation
+    manning_n  : (N,)   float32 or None - optional source-cell Manning roughness
     cell_bbox  : (N, 4) float32  - per-cell xmin, xmax, ymin, ymax
 
     Polygon vertices
@@ -106,6 +107,7 @@ class MeshGeometry:
     E: int
     V: int
     max_degree: int = 3
+    manning_n: NDArray[np.float32] | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +148,7 @@ def build_geometry(
     face_offsets: NDArray[np.int32] | None = None,
     *,
     zb_from_file: NDArray[np.float32],
+    manning_n_from_file: NDArray[np.float32] | None = None,
     progress: bool = False,
 ) -> MeshGeometry:
     """Precompute all geometric quantities from vertex/face arrays.
@@ -162,6 +165,8 @@ def build_geometry(
         Required when faces is 1-D.
     zb_from_file : (N,) float32
         Required per-cell bed elevation.
+    manning_n_from_file : (N,) float32, optional
+        Per-cell Manning roughness. Values must be finite and positive.
     progress : bool, optional
         Print coarse per-stage timing to stdout. The edge-enumeration and CSR
         stages are Python loops over every cell and edge, so progress remains
@@ -271,7 +276,7 @@ def build_geometry(
         ]
     ).astype(np.float32)
 
-    # ── Bed elevation ─────────────────────────────────────────────────────────
+    # ── Bed elevation and optional roughness ──────────────────────────────────
     _log(f"cell area/centroid done in {time.perf_counter() - _t_stage:.1f}s")
     zb = np.asarray(zb_from_file, dtype=np.float32)
     if zb.shape != (n,):
@@ -279,6 +284,14 @@ def build_geometry(
     if not np.isfinite(zb).all():
         raise ValueError("zb_from_file must contain only finite values")
 
+    if manning_n_from_file is None:
+        manning_n = None
+    else:
+        manning_n = np.asarray(manning_n_from_file, dtype=np.float32).reshape(-1)
+        if manning_n.size != n:
+            raise ValueError(f"manning_n: expected {n} values, got {manning_n.size}")
+        if not np.isfinite(manning_n).all() or not (manning_n > 0.0).all():
+            raise ValueError("manning_n must contain finite positive values")
     # ── Edge enumeration ──────────────────────────────────────────────────────
     _t_stage = time.perf_counter()
     half_edge_map: dict[tuple[int, int], list[int]] = {}
@@ -416,6 +429,7 @@ def build_geometry(
         centroid=centroid,
         area=area,
         zb=zb,
+        manning_n=manning_n,
         cell_vertices=cell_vertices,
         cell_vertex_ptr=cell_vertex_ptr,
         cell_bbox=cell_bbox,
@@ -504,6 +518,7 @@ def hilbert_reorder(
     centroid = geom.centroid[perm]
     area = geom.area[perm]
     zb = geom.zb[perm]
+    manning_n = None if geom.manning_n is None else geom.manning_n[perm]
     cell_bbox = geom.cell_bbox[perm]
 
     old_vertex_degrees = np.diff(geom.cell_vertex_ptr)
@@ -613,6 +628,7 @@ def hilbert_reorder(
         centroid=centroid,
         area=area,
         zb=zb,
+        manning_n=manning_n,
         cell_vertices=cell_vertices,
         cell_vertex_ptr=new_vertex_ptr,
         cell_bbox=cell_bbox,

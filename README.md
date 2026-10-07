@@ -22,7 +22,6 @@ In plain terms, the simulation divides the terrain into a grid of connected cell
 much water is present in each cell and how water flows between neighboring cells. The underlying physics is described by the Shallow Water Equations,
 a widely used model for simulating the movement of a shallow layer of water over terrain. Fluxes between cells are computed using the HLLC solver, a well-established approximate Riemann solver for this type of flow.
 
-
 ## The runtime pipeline
 
 `SWEWorkflow` has two stages: preparation and simulation.
@@ -140,6 +139,12 @@ finite `z_mean` column containing per-cell bed elevations. OBJ files need a Z
 coordinate on every vertex; vertex elevations are averaged per cell. Meshes
 without elevation data are rejected.
 
+GIS meshes may also carry an optional per-cell `manning_n` column (`.parquet`,
+`.geoparquet`, `.gpkg`, `.shp`). Values must be finite and positive, and they
+override `config.manning_n` cell by cell where present; `WorkflowConfig.manning_n`
+is still required and must be positive — it is the fallback. OBJ meshes cannot
+carry the column.
+
 ### Minimal API usage
 
 ```python
@@ -208,7 +213,9 @@ The accepted fields are:
 Every per-cell field must contain exactly one finite value per mesh cell.
 `h` takes precedence when both `h` and `wse` are present. Negative depths are
 clamped to zero, momentum is cleared in dry cells, and `n_mann` is floored at
-`1e-4`.
+`1e-4`. When the mesh (or its geometry artifact) carries a `manning_n` column,
+that value replaces `config.manning_n` cell by cell; a loaded-state `n_mann`
+takes precedence over both.
 
 The default `initial_state_order` is `"solver"`. With Hilbert reordering,
 `workflow.perm` satisfies:

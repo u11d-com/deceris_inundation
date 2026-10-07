@@ -6,9 +6,9 @@ and Wavefront OBJ (.obj) formats.
 
 Usage
 -----
-    from swe_mesh import load_mesh_file
-
-    verts, faces, face_offsets, zb_from_file = load_mesh_file("path/to/mesh.gpkg")
+    verts, faces, face_offsets, zb_from_file, manning_n_from_file = load_mesh_file(
+        "path/to/mesh.gpkg"
+    )
 """
 
 import numpy as np
@@ -17,10 +17,27 @@ from numpy.typing import NDArray
 from ..tuning import MIN_POLYGON_VERTICES
 
 
+def _load_optional_manning_n(values: object) -> NDArray[np.float32]:
+    """Return finite-positive per-cell Manning roughness from a source column."""
+    try:
+        manning_n = np.asarray(values, dtype=np.float32).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("manning_n must contain finite positive values") from exc
+    if not np.isfinite(manning_n).all() or not (manning_n > 0.0).all():
+        raise ValueError("manning_n must contain finite positive values")
+    return manning_n
+
+
 def load_mesh_file(
     path: str,
-) -> tuple[NDArray[np.float32], NDArray[np.int32], NDArray[np.int32], NDArray[np.float32]]:
-    """Load a polygonal mesh and required per-cell bed elevations.
+) -> tuple[
+    NDArray[np.float32],
+    NDArray[np.int32],
+    NDArray[np.int32],
+    NDArray[np.float32],
+    NDArray[np.float32] | None,
+]:
+    """Load a polygonal mesh with required bed elevations, plus optional roughness.
 
     Accepts triangles, quads, and arbitrary convex polygons.
 
@@ -28,16 +45,18 @@ def load_mesh_file(
                    each feature must be a simple polygon (convex recommended).
                    .parquet / .geoparquet use pyarrow + shapely only (no geopandas).
                    .gpkg / .shp require geopandas (pip install geopandas).
-                   All GIS formats require a ``z_mean`` bed-elevation column.
+                   All GIS formats require a ``z_mean`` bed-elevation column;
+                   the optional ``manning_n`` column must be finite and positive.
     .obj         : Wavefront OBJ; every ``v`` record must include Z. Face
                    vertex elevations are averaged into per-cell bed elevations.
 
     Returns
     -------
-    verts        : (V, 2) float32   vertex (x, y) coordinates
-    faces        : (sum_of_degrees,) int32  flat vertex indices for all faces
-    face_offsets : (N+1,) int32  face i has verts faces[face_offsets[i]:face_offsets[i+1]]
-    zb_from_file : (N,) float32  required per-cell bed elevations
+    verts               : (V, 2) float32   vertex (x, y) coordinates
+    faces               : (sum_of_degrees,) int32  flat vertex indices for all faces
+    face_offsets        : (N+1,) int32  face i has verts faces[face_offsets[i]:face_offsets[i+1]]
+    zb_from_file        : (N,) float32  required per-cell bed elevations
+    manning_n_from_file : (N,) float32 or None  per-cell Manning roughness attribute
 
     """
     import os as _os
@@ -86,6 +105,13 @@ def load_mesh_file(
         zb_vals = table.column("z_mean").to_numpy(zero_copy_only=False)[not_null].astype(np.float32)
         if not np.isfinite(zb_vals).all():
             raise ValueError(f"Mesh file '{path}' contains non-finite 'z_mean' elevations")
+        manning_n_vals = (
+            _load_optional_manning_n(
+                table.column("manning_n").to_numpy(zero_copy_only=False)[not_null]
+            )
+            if "manning_n" in table.column_names
+            else None
+        )
 
         verts = np.array(all_coords, dtype=np.float32)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
@@ -93,7 +119,7 @@ def load_mesh_file(
         for i, f in enumerate(faces_list):
             offsets[i + 1] = offsets[i] + len(f)
 
-        return verts, faces_flat, offsets, zb_vals
+        return verts, faces_flat, offsets, zb_vals, manning_n_vals
 
     if ext in (".gpkg", ".shp"):
         import geopandas as gpd
@@ -126,9 +152,15 @@ def load_mesh_file(
             )
         if "z_mean" not in gdf.columns:
             raise ValueError(f"Mesh file '{path}' is missing required 'z_mean' bed elevations")
-        zb_vals = gdf.loc[gdf.geometry.notna(), "z_mean"].to_numpy(dtype=np.float32)
+        valid_geometry = gdf.geometry.notna()
+        zb_vals = gdf.loc[valid_geometry, "z_mean"].to_numpy(dtype=np.float32)
         if not np.isfinite(zb_vals).all():
             raise ValueError(f"Mesh file '{path}' contains non-finite 'z_mean' elevations")
+        manning_n_vals = (
+            _load_optional_manning_n(gdf.loc[valid_geometry, "manning_n"].to_numpy())
+            if "manning_n" in gdf.columns
+            else None
+        )
 
         verts = np.array(all_coords, dtype=np.float32)
         faces_flat = np.concatenate([np.array(f, dtype=np.int32) for f in faces_list])
@@ -136,7 +168,7 @@ def load_mesh_file(
         for i, f in enumerate(faces_list):
             offsets[i + 1] = offsets[i] + len(f)
 
-        return verts, faces_flat, offsets, zb_vals
+        return verts, faces_flat, offsets, zb_vals, manning_n_vals
 
     if ext == ".obj":
         vert_list: list[list[float]] = []
@@ -173,7 +205,7 @@ def load_mesh_file(
             offsets[i + 1] = offsets[i] + len(f)
         zb_vals = np.asarray([vertex_z[f].mean() for f in faces_list], dtype=np.float32)
 
-        return verts, faces_flat, offsets, zb_vals
+        return verts, faces_flat, offsets, zb_vals, None
 
     raise ValueError(
         f"Unsupported format: '{ext}'. Supported: .gpkg, .shp, .parquet, .geoparquet, .obj"

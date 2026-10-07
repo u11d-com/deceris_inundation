@@ -473,13 +473,20 @@ class SWEWorkflow:
         faces_flat: NDArray[np.int32] | None = None
         face_offsets: NDArray[np.int32] | None = None
         zb_from_file: NDArray[np.float32] | None = None
+        manning_n_from_file: NDArray[np.float32] | None = None
 
         if geom is None:
             # Cache miss (or caching disabled) — the only path that needs the
             # mesh file itself; a cache hit skips both the file read and the
             # Python-loop-heavy build_geometry()/hilbert_reorder() entirely.
             _t_stage = time.perf_counter()
-            verts, faces_flat, face_offsets, loaded_zb = load_mesh_file(self.config.mesh_source)
+            (
+                verts,
+                faces_flat,
+                face_offsets,
+                loaded_zb,
+                manning_n_from_file,
+            ) = load_mesh_file(self.config.mesh_source)
             zb_from_file = loaded_zb
             _log(
                 f"mesh file loaded in {time.perf_counter() - _t_stage:.1f}s "
@@ -490,6 +497,7 @@ class SWEWorkflow:
                 faces_flat,
                 face_offsets=face_offsets,
                 zb_from_file=loaded_zb,
+                manning_n_from_file=manning_n_from_file,
                 progress=progress,
             )
 
@@ -512,7 +520,11 @@ class SWEWorkflow:
         h0 = np.zeros(geom.N, dtype=np.float32)
         hu0 = np.zeros(geom.N, dtype=np.float32)
         hv0 = np.zeros(geom.N, dtype=np.float32)
-        n0 = np.full(geom.N, self.config.manning_n, dtype=np.float32)
+        n0 = (
+            geom.manning_n
+            if geom.manning_n is not None
+            else np.full(geom.N, self.config.manning_n, dtype=np.float32)
+        )
 
         loaded_state = _load_initial_state(
             self.config.initial_state_source,

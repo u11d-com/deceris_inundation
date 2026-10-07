@@ -57,9 +57,15 @@ def test_geometry_defaults_are_explicitly_flat() -> None:
 
 
 def test_geometry_cache_roundtrip() -> None:
-    """Cache a geometry, reload it, and diff all arrays/scalars."""
+    """Cache a geometry, including optional mesh roughness, and reload it."""
     verts, faces = _small_quad_mesh()
-    geom = build_geometry(verts, faces, zb_from_file=np.zeros(len(faces), dtype=np.float32))
+    manning_n = np.asarray([0.02, 0.025, 0.03, 0.035], dtype=np.float32)
+    geom = build_geometry(
+        verts,
+        faces,
+        zb_from_file=np.zeros(len(faces), dtype=np.float32),
+        manning_n_from_file=manning_n,
+    )
     geom, perm = hilbert_reorder(geom, verbose=False)
 
     with tempfile.TemporaryDirectory() as tmp:

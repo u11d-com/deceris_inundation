@@ -1,6 +1,6 @@
 [project]
 name = "deceris-inundation"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standalone Vulkan SWE mesh solver for flood inundation modeling."
 requires-python = ">=3.12,<3.13"
 dependencies = ["numpy>=1.24,<2.0", "hilbertcurve>=2.0"]

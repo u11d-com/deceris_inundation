@@ -25,13 +25,14 @@ if TYPE_CHECKING:
 # Bump whenever build_geometry()/hilbert_reorder() output arrays change
 # shape, dtype, or semantics, so old on-disk caches are rejected instead of
 # silently served with stale/incompatible contents.
-GEOMETRY_CACHE_VERSION = 3
+GEOMETRY_CACHE_VERSION = 4
 
 # Field order matters only for readability; np.savez uses keyword storage.
 _GEOMETRY_ARRAY_FIELDS = (
     "centroid",
     "area",
     "zb",
+    "manning_n",
     "cell_vertices",
     "cell_vertex_ptr",
     "cell_bbox",
@@ -80,7 +81,14 @@ def save_geometry_cache(
     out_dir.mkdir(parents=True, exist_ok=True)
     path = geometry_cache_path(out_dir, cache_key)
 
-    arrays = {name: getattr(geom, name) for name in _GEOMETRY_ARRAY_FIELDS}
+    arrays = {
+        name: (
+            np.empty(0, dtype=np.float32)
+            if name == "manning_n" and geom.manning_n is None
+            else getattr(geom, name)
+        )
+        for name in _GEOMETRY_ARRAY_FIELDS
+    }
     scalars = {name: np.int64(getattr(geom, name)) for name in _GEOMETRY_SCALAR_FIELDS}
     # Write to a temp file then rename so interruption cannot leave a truncated
     # cache. Passing an open handle avoids np.savez appending another suffix.
@@ -113,7 +121,8 @@ def load_geometry_cache(
             ]
             if missing:
                 return None
-            arrays: dict[str, NDArray[Any]] = {name: npz[name] for name in _GEOMETRY_ARRAY_FIELDS}
+            arrays: dict[str, Any] = {name: npz[name] for name in _GEOMETRY_ARRAY_FIELDS}
+            arrays["manning_n"] = None if arrays["manning_n"].size == 0 else arrays["manning_n"]
             scalars: dict[str, int] = {name: int(npz[name]) for name in _GEOMETRY_SCALAR_FIELDS}
             perm = npz["perm"]
     except (OSError, ValueError, KeyError, EOFError):
